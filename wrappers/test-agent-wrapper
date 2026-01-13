@@ -1,0 +1,59 @@
+#!/bin/bash
+# Template wrapper for any CLI coding agent
+#
+# To create a wrapper for a new agent:
+# 1. Copy this file to <agent-name>-wrapper
+# 2. Replace AGENT_NAME with your agent's binary name
+# 3. Replace AGENT_TYPE with a unique identifier (e.g., "cursor", "windsurf")
+# 4. Make it executable: chmod +x <agent-name>-wrapper
+# 5. Run setup-wrappers.sh to install it
+
+AGENT_NAME="test-agent"  # e.g., "cursor", "windsurf", "aider"
+AGENT_TYPE="test_agent"          # e.g., "cursor", "windsurf", "aider"
+
+# Find the original agent binary
+AGENT_BIN=$(which -a "$AGENT_NAME" | grep -v "$(readlink -f "$0")" | head -n 1)
+
+if [ -z "$AGENT_BIN" ]; then
+    echo "Error: Could not find original $AGENT_NAME binary" >&2
+    exit 1
+fi
+
+# Generate unique task ID
+TASK_ID=$(uuidgen)
+
+# Capture the command arguments for the title
+if [ $# -eq 0 ]; then
+    TASK_TITLE="$AGENT_NAME (interactive)"
+else
+    # Truncate to 100 chars
+    TASK_TITLE="$AGENT_NAME $*"
+    TASK_TITLE="${TASK_TITLE:0:100}"
+fi
+
+# Register task as 'running' with process tracking
+agent-inbox report start "$TASK_ID" "$AGENT_TYPE" "$PWD" "$TASK_TITLE" --pid $$ --ppid $PPID 2>/dev/null || {
+    echo "Warning: Failed to register task with agent-inbox" >&2
+}
+
+# Start background monitor for this specific process
+agent-inbox monitor "$TASK_ID" $$ &
+MONITOR_PID=$!
+
+# Trap to ensure cleanup on exit
+cleanup() {
+    EXIT_CODE=$?
+
+    # Kill monitor (it may have already detected completion)
+    kill $MONITOR_PID 2>/dev/null
+
+    # Report completion if not already detected
+    agent-inbox report complete "$TASK_ID" --exit-code "$EXIT_CODE" 2>/dev/null || true
+
+    exit $EXIT_CODE
+}
+
+trap cleanup EXIT INT TERM
+
+# Run actual agent command with all args, preserving all I/O
+exec "$AGENT_BIN" "$@"

@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "idle_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -n \"$AGENT_TASK_ID\" ]; then agent-inbox report needs-attention \"$AGENT_TASK_ID\" \"Waiting for user input\"; fi",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -n \"$AGENT_TASK_ID\" ]; then agent-inbox report needs-attention \"$AGENT_TASK_ID\" \"Response completed - may need guidance\"; fi",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

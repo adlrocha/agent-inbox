@@ -1,0 +1,49 @@
+#!/bin/bash
+# Wrapper for Claude Code CLI to track tasks in agent-inbox
+# This wrapper transparently intercepts claude commands and reports to agent-inbox
+
+# Find the original claude binary
+CLAUDE_BIN=$(which -a claude | grep -v "$(readlink -f "$0")" | head -n 1)
+
+if [ -z "$CLAUDE_BIN" ]; then
+    echo "Error: Could not find original claude binary" >&2
+    exit 1
+fi
+
+# Generate unique task ID
+TASK_ID=$(uuidgen)
+
+# Export task ID so Claude hooks can access it
+export AGENT_TASK_ID="$TASK_ID"
+
+# Capture the command arguments for the title
+if [ $# -eq 0 ]; then
+    TASK_TITLE="claude (interactive)"
+else
+    # Truncate to 100 chars
+    TASK_TITLE="claude $*"
+    TASK_TITLE="${TASK_TITLE:0:100}"
+fi
+
+# Register task as 'running' with process tracking
+agent-inbox report start "$TASK_ID" "claude_code" "$PWD" "$TASK_TITLE" --pid $$ --ppid $PPID 2>/dev/null || {
+    echo "Warning: Failed to register task with agent-inbox" >&2
+}
+
+# Start background monitor to detect attention needs
+# The monitor will detect if the process is waiting for input or stalled
+agent-inbox monitor "$TASK_ID" $$ >/dev/null 2>&1 &
+MONITOR_PID=$!
+
+# Run actual claude command with all args, preserving all I/O
+# Use direct execution (not exec) so we can capture exit code
+"$CLAUDE_BIN" "$@"
+EXIT_CODE=$?
+
+# Kill monitor (it may have already detected completion and exited)
+kill $MONITOR_PID 2>/dev/null || true
+
+# Report completion (in case monitor didn't catch it, or we beat it)
+agent-inbox report complete "$TASK_ID" --exit-code "$EXIT_CODE" 2>/dev/null || true
+
+exit $EXIT_CODE

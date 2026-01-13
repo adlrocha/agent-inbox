@@ -1,0 +1,30 @@
+[package]
+name = "agent-inbox"
+version = "0.1.0"
+edition = "2021"
+authors = ["adlrocha"]
+
+[lib]
+name = "agent_inbox"
+path = "src/lib.rs"
+
+[[bin]]
+name = "agent-inbox"
+path = "src/main.rs"
+
+[[bin]]
+name = "agent-bridge"
+path = "src/bin/agent-bridge.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.11", features = ["v4"] }
+anyhow = "1.0"
+thiserror = "2.0"
+
+[dev-dependencies]
+tempfile = "3.13"

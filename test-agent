@@ -1,0 +1,13 @@
+#!/bin/bash
+# Mock agent for testing wrappers
+
+echo "Test Agent v1.0"
+echo "Arguments: $*"
+echo "Working in: $PWD"
+echo ""
+
+# Simulate some work
+sleep 2
+
+echo "Task completed successfully!"
+exit 0
