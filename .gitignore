@@ -1,1 +1,8 @@
 /target
+*.db
+*.db-*
+.env
+.env.local
+*.log
+.DS_Store
+.claude/settings.local.json
