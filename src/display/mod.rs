@@ -17,37 +17,29 @@ const WHITE: &str = "\x1b[37m";
 const GRAY: &str = "\x1b[90m";
 
 // Bright colors
-const BRIGHT_RED: &str = "\x1b[91m";
-const BRIGHT_GREEN: &str = "\x1b[92m";
-const BRIGHT_YELLOW: &str = "\x1b[93m";
 const BRIGHT_BLUE: &str = "\x1b[94m";
 const BRIGHT_CYAN: &str = "\x1b[96m";
 
 // Icons (using Unicode)
-const ICON_ATTENTION: &str = "⚠️ ";
 const ICON_RUNNING: &str = "▶️ ";
 const ICON_COMPLETED: &str = "✓";
 const ICON_FAILED: &str = "✗";
 const ICON_ARROW: &str = "→";
 
 pub fn display_task_list(tasks: &[Task]) {
-    let mut needs_attention = Vec::new();
     let mut running = Vec::new();
     let mut completed = Vec::new();
-    let mut failed = Vec::new();
+    let mut exited = Vec::new();
 
     for task in tasks {
         match task.status {
-            TaskStatus::NeedsAttention => needs_attention.push(task),
             TaskStatus::Running => running.push(task),
             TaskStatus::Completed => completed.push(task),
-            TaskStatus::Failed => failed.push(task),
+            TaskStatus::Exited => exited.push(task),
         }
     }
 
-    let total_active = needs_attention.len() + running.len();
-
-    if total_active == 0 && completed.is_empty() && failed.is_empty() {
+    if running.is_empty() && completed.is_empty() && exited.is_empty() {
         println!("{}{}No active tasks{}", DIM, GRAY, RESET);
         println!("{}Start a conversation in Claude.ai or Gemini to create tasks{}", DIM, RESET);
         return;
@@ -63,17 +55,14 @@ pub fn display_task_list(tasks: &[Task]) {
     // Summary line with colors
     let mut summary_parts = Vec::new();
 
-    if needs_attention.len() > 0 {
-        summary_parts.push(format!("{}{}{} need attention{}", BOLD, BRIGHT_YELLOW, needs_attention.len(), RESET));
-    }
-    if running.len() > 0 {
+    if !running.is_empty() {
         summary_parts.push(format!("{}{}{} running{}", BOLD, BRIGHT_BLUE, running.len(), RESET));
     }
-    if completed.len() > 0 {
+    if !completed.is_empty() {
         summary_parts.push(format!("{}{} completed{}", GREEN, completed.len(), RESET));
     }
-    if failed.len() > 0 {
-        summary_parts.push(format!("{}{} failed{}", BRIGHT_RED, failed.len(), RESET));
+    if !exited.is_empty() {
+        summary_parts.push(format!("{}{} exited{}", GRAY, exited.len(), RESET));
     }
 
     if !summary_parts.is_empty() {
@@ -81,53 +70,40 @@ pub fn display_task_list(tasks: &[Task]) {
         println!();
     }
 
-    // Needs Attention section (most important)
-    if !needs_attention.is_empty() {
-        println!("{}{}{} NEEDS ATTENTION{}", BOLD, BRIGHT_YELLOW, ICON_ATTENTION, RESET);
+    // Running section (most important - agents actively generating)
+    if !running.is_empty() {
+        println!("{}{}{} RUNNING{}", BOLD, BRIGHT_BLUE, ICON_RUNNING, RESET);
         println!("{}{}{}", GRAY, "─".repeat(50), RESET);
-        for (idx, task) in needs_attention.iter().enumerate() {
+        for (idx, task) in running.iter().enumerate() {
             print_task_summary(idx + 1, task);
         }
         println!();
     }
 
-    // Running section
-    if !running.is_empty() {
-        println!("{}{}{} RUNNING{}", BOLD, BRIGHT_BLUE, ICON_RUNNING, RESET);
-        println!("{}{}{}", GRAY, "─".repeat(50), RESET);
-        let start_idx = needs_attention.len();
-        for (idx, task) in running.iter().enumerate() {
-            print_task_summary(start_idx + idx + 1, task);
-        }
-        println!();
-    }
-
-    // Completed section
+    // Completed section (waiting for user input)
     if !completed.is_empty() {
         println!("{}{} {} COMPLETED{}", BOLD, GREEN, ICON_COMPLETED, RESET);
         println!("{}{}{}", GRAY, "─".repeat(50), RESET);
-        let start_idx = needs_attention.len() + running.len();
+        let start_idx = running.len();
         for (idx, task) in completed.iter().enumerate() {
             print_task_summary(start_idx + idx + 1, task);
         }
         println!();
     }
 
-    // Failed section
-    if !failed.is_empty() {
-        println!("{}{} {} FAILED{}", BOLD, BRIGHT_RED, ICON_FAILED, RESET);
+    // Exited section (closed/terminated)
+    if !exited.is_empty() {
+        println!("{}{} {} EXITED{}", BOLD, GRAY, ICON_FAILED, RESET);
         println!("{}{}{}", GRAY, "─".repeat(50), RESET);
-        let start_idx = needs_attention.len() + running.len() + completed.len();
-        for (idx, task) in failed.iter().enumerate() {
+        let start_idx = running.len() + completed.len();
+        for (idx, task) in exited.iter().enumerate() {
             print_task_summary(start_idx + idx + 1, task);
         }
         println!();
     }
 
     // Footer with helpful info
-    if !completed.is_empty() {
-        println!("{}{} Completed tasks auto-clear after 1 hour{}", DIM, GRAY, RESET);
-    }
+    println!("{}{} Exited tasks auto-clear after 1 hour{}", DIM, GRAY, RESET);
     println!("{}{} Run {}agent-inbox show <id>{} for details{}", DIM, GRAY, CYAN, GRAY, RESET);
     println!();
 }
@@ -152,10 +128,9 @@ fn print_task_summary(idx: usize, task: &Task) {
 
     // Status indicator
     let status_indicator = match task.status {
-        TaskStatus::NeedsAttention => format!("{}{}", BRIGHT_YELLOW, "●"),
         TaskStatus::Running => format!("{}{}", BRIGHT_BLUE, "●"),
         TaskStatus::Completed => format!("{}{}", GREEN, "●"),
-        TaskStatus::Failed => format!("{}{}", BRIGHT_RED, "●"),
+        TaskStatus::Exited => format!("{}{}", GRAY, "●"),
     };
 
     // Print task line with colors
@@ -165,16 +140,10 @@ fn print_task_summary(idx: usize, task: &Task) {
     print!("{}\"{}\"{} ", WHITE, truncate(&task.title, 60), RESET);
     println!("{}{}{}", DIM, elapsed, RESET);
 
-    // Additional info indented
-    if task.status == TaskStatus::NeedsAttention {
-        if let Some(reason) = &task.attention_reason {
-            println!("      {}{} {}{}", YELLOW, ICON_ARROW, reason, RESET);
-        }
-    }
-
-    if task.status == TaskStatus::Failed {
+    // Additional info for exited tasks
+    if task.status == TaskStatus::Exited {
         if let Some(code) = task.exit_code {
-            println!("      {}{} Exit code: {}{}", RED, ICON_ARROW, code, RESET);
+            println!("      {}{} Exit code: {}{}", GRAY, ICON_ARROW, code, RESET);
         }
     }
 }
@@ -190,8 +159,7 @@ pub fn display_task_detail(task: &Task) {
     let (status_color, status_text) = match task.status {
         TaskStatus::Running => (BRIGHT_BLUE, "RUNNING"),
         TaskStatus::Completed => (GREEN, "COMPLETED"),
-        TaskStatus::NeedsAttention => (BRIGHT_YELLOW, "NEEDS ATTENTION"),
-        TaskStatus::Failed => (BRIGHT_RED, "FAILED"),
+        TaskStatus::Exited => (GRAY, "EXITED"),
     };
 
     println!("{}{}Status:{} {}{}{}{}", BOLD, GRAY, RESET, BOLD, status_color, status_text, RESET);
@@ -290,9 +258,9 @@ mod tests {
     fn test_format_elapsed() {
         let now = Utc::now().timestamp();
 
-        assert_eq!(format_elapsed(now - 30), "30s ago");
-        assert_eq!(format_elapsed(now - 120), "2m ago");
-        assert_eq!(format_elapsed(now - 3660), "1h ago");
-        assert_eq!(format_elapsed(now - 90000), "1d ago");
+        assert_eq!(format_elapsed(now - 30), "(30s ago)");
+        assert_eq!(format_elapsed(now - 120), "(2m ago)");
+        assert_eq!(format_elapsed(now - 3660), "(1h ago)");
+        assert_eq!(format_elapsed(now - 90000), "(1d ago)");
     }
 }

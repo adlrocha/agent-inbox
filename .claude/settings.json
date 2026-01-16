@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -n \"$AGENT_TASK_ID\" ]; then agent-inbox report needs-attention \"$AGENT_TASK_ID\" \"Waiting for user input\"; fi",
+            "command": "if [ -n \"$AGENT_TASK_ID\" ]; then agent-inbox report complete \"$AGENT_TASK_ID\"; fi",
             "timeout": 5
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -n \"$AGENT_TASK_ID\" ]; then agent-inbox report needs-attention \"$AGENT_TASK_ID\" \"Response completed - may need guidance\"; fi",
+            "command": "if [ -n \"$AGENT_TASK_ID\" ]; then agent-inbox report complete \"$AGENT_TASK_ID\"; fi",
             "timeout": 5
           }
         ]

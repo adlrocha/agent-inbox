@@ -1,3 +1,10 @@
+//! Attention detectors for CLI process monitoring
+//!
+//! Currently not used - kept for potential future enhancement.
+//! The monitor uses a simple process-alive check instead.
+
+#![allow(dead_code)]
+
 use crate::models::Task;
 use std::fs;
 use std::process::Command;
@@ -12,6 +19,7 @@ pub enum AttentionReason {
 }
 
 impl AttentionReason {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn as_str(&self) -> String {
         match self {
             AttentionReason::WaitingForInput => "Waiting for input".to_string(),

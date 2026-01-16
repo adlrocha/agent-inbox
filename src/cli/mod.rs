@@ -16,7 +16,7 @@ pub enum Commands {
         #[arg(short, long)]
         all: bool,
 
-        /// Filter by status: running, completed, needs_attention, failed
+        /// Filter by status: running, completed, exited
         #[arg(short, long)]
         status: Option<String>,
     },
@@ -33,7 +33,7 @@ pub enum Commands {
         task_id: String,
     },
 
-    /// Clear all completed and failed tasks
+    /// Clear all completed and exited tasks
     ClearAll,
 
     /// Force clear ALL tasks regardless of status (use when stuck)
@@ -102,23 +102,5 @@ pub enum ReportAction {
         /// Exit code
         #[arg(long)]
         exit_code: Option<i32>,
-    },
-
-    /// Report that task needs attention
-    NeedsAttention {
-        /// Task ID
-        task_id: String,
-
-        /// Reason for needing attention
-        reason: String,
-    },
-
-    /// Report task failure
-    Failed {
-        /// Task ID
-        task_id: String,
-
-        /// Exit code
-        exit_code: i32,
     },
 }

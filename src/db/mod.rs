@@ -343,12 +343,11 @@ mod tests {
 
         db.insert_task(&task).unwrap();
 
-        task.complete(Some(0));
+        task.complete();
         db.update_task(&task).unwrap();
 
         let retrieved = db.get_task_by_id("test-123").unwrap().unwrap();
         assert_eq!(retrieved.status, TaskStatus::Completed);
-        assert_eq!(retrieved.exit_code, Some(0));
     }
 
     #[test]
@@ -369,7 +368,7 @@ mod tests {
             None,
             None,
         );
-        task2.complete(Some(0));
+        task2.complete();
 
         db.insert_task(&task1).unwrap();
         db.insert_task(&task2).unwrap();
@@ -420,7 +419,7 @@ mod tests {
         );
 
         // Create a completed task
-        task.complete(Some(0));
+        task.complete();
         db.insert_task(&task).unwrap();
 
         // Should not delete tasks completed less than 1 second ago

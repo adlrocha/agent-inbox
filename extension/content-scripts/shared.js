@@ -142,35 +142,16 @@ class ConversationTracker {
   }
 
   /**
-   * Mark as needs attention
-   */
-  markNeedsAttention(reason) {
-    if (this.activeConversation && !this.activeConversation.needsAttentionReported) {
-      debugLog("MARKING AS NEEDS ATTENTION:", reason);
-
-      sendTaskUpdate(this.agentType, this.activeConversation.taskId, "needs_attention", this.activeConversation.title, {
-        url: window.location.href,
-        conversation_id: this.activeConversation.conversationId,
-        timestamp: Date.now(),
-        reason: reason,
-      });
-
-      this.activeConversation.needsAttentionReported = true;
-    }
-  }
-
-  /**
-   * Handle page unload
+   * Handle page unload - mark task as exited when tab closes
    */
   handleUnload() {
-    if (this.activeConversation && this.activeConversation.isGenerating) {
-      debugLog("Page unloading, marking active conversation as completed");
+    if (this.activeConversation) {
+      debugLog("Page unloading, marking conversation as exited");
 
-      sendTaskUpdate(this.agentType, this.activeConversation.taskId, "completed", this.activeConversation.title, {
+      sendTaskUpdate(this.agentType, this.activeConversation.taskId, "exited", this.activeConversation.title, {
         url: window.location.href,
         conversation_id: this.activeConversation.conversationId,
         timestamp: Date.now(),
-        duration_ms: Date.now() - this.activeConversation.startTime,
         reason: "tab_closed",
       });
     }

@@ -25,6 +25,7 @@ struct IncomingMessage {
 struct MessageContext {
     url: Option<String>,
     conversation_id: Option<String>,
+    #[allow(dead_code)]
     timestamp: Option<i64>,
     duration_ms: Option<i64>,
 }
@@ -128,9 +129,9 @@ fn process_message(db: &Database, message: IncomingMessage) -> Result<()> {
             }
         }
         "completed" => {
-            // Update existing task
+            // Update existing task to completed (finished generating, waiting for user)
             if let Some(mut task) = db.get_task_by_id(&message.task_id)? {
-                task.complete(Some(0));
+                task.complete();
                 db.update_task(&task)?;
 
                 eprintln!("Completed task: {}", message.task_id);
@@ -138,13 +139,13 @@ fn process_message(db: &Database, message: IncomingMessage) -> Result<()> {
                 eprintln!("Task not found: {}", message.task_id);
             }
         }
-        "needs_attention" => {
-            // Update existing task
+        "exited" => {
+            // Update existing task to exited (tab closed / process terminated)
             if let Some(mut task) = db.get_task_by_id(&message.task_id)? {
-                task.needs_attention("Waiting for user action".to_string());
+                task.set_exited(None);
                 db.update_task(&task)?;
 
-                eprintln!("Task needs attention: {}", message.task_id);
+                eprintln!("Task exited: {}", message.task_id);
             } else {
                 eprintln!("Task not found: {}", message.task_id);
             }

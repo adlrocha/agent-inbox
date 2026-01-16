@@ -28,8 +28,8 @@ fn main() -> Result<()> {
 
     match cli.command {
         None => {
-            // Default: show tasks needing attention
-            let tasks = db.list_tasks(Some(TaskStatus::NeedsAttention))?;
+            // Default: show running tasks (actively generating)
+            let tasks = db.list_tasks(Some(TaskStatus::Running))?;
             display::display_task_list(&tasks);
         }
         Some(Commands::List { all, status }) => {
@@ -40,7 +40,8 @@ fn main() -> Result<()> {
             } else if all {
                 db.list_tasks(None)?
             } else {
-                db.list_tasks(Some(TaskStatus::NeedsAttention))?
+                // Show running tasks by default
+                db.list_tasks(Some(TaskStatus::Running))?
             };
 
             display::display_task_list(&tasks);
@@ -62,10 +63,10 @@ fn main() -> Result<()> {
         }
         Some(Commands::ClearAll) => {
             let completed = db.list_tasks(Some(TaskStatus::Completed))?;
-            let failed = db.list_tasks(Some(TaskStatus::Failed))?;
+            let exited = db.list_tasks(Some(TaskStatus::Exited))?;
 
             let mut count = 0;
-            for task in completed.iter().chain(failed.iter()) {
+            for task in completed.iter().chain(exited.iter()) {
                 db.delete_task(&task.task_id)?;
                 count += 1;
             }
@@ -156,27 +157,19 @@ fn main() -> Result<()> {
                     .get_task_by_id(&task_id)?
                     .ok_or_else(|| anyhow::anyhow!("Task not found: {}", task_id))?;
 
-                task.complete(exit_code);
+                // If exit_code is provided and non-zero, mark as exited (failed)
+                // Otherwise mark as completed (finished generating)
+                if let Some(code) = exit_code {
+                    if code != 0 {
+                        task.set_exited(Some(code));
+                    } else {
+                        task.complete();
+                    }
+                } else {
+                    task.complete();
+                }
                 db.update_task(&task)?;
                 println!("Task completed: {}", task_id);
-            }
-            ReportAction::NeedsAttention { task_id, reason } => {
-                let mut task = db
-                    .get_task_by_id(&task_id)?
-                    .ok_or_else(|| anyhow::anyhow!("Task not found: {}", task_id))?;
-
-                task.needs_attention(reason);
-                db.update_task(&task)?;
-                println!("Task needs attention: {}", task_id);
-            }
-            ReportAction::Failed { task_id, exit_code } => {
-                let mut task = db
-                    .get_task_by_id(&task_id)?
-                    .ok_or_else(|| anyhow::anyhow!("Task not found: {}", task_id))?;
-
-                task.complete(Some(exit_code));
-                db.update_task(&task)?;
-                println!("Task failed: {}", task_id);
             }
         },
         Some(Commands::Monitor { task_id, pid }) => {

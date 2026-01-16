@@ -2,12 +2,15 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Task status - simplified to 3 states for reliability
+/// - Running: Agent is actively generating output
+/// - Completed: Agent finished generating, waiting for user input
+/// - Exited: Agent/tab closed or process terminated
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum TaskStatus {
     Running,
     Completed,
-    NeedsAttention,
-    Failed,
+    Exited,
 }
 
 impl TaskStatus {
@@ -15,8 +18,7 @@ impl TaskStatus {
         match self {
             TaskStatus::Running => "running",
             TaskStatus::Completed => "completed",
-            TaskStatus::NeedsAttention => "needs_attention",
-            TaskStatus::Failed => "failed",
+            TaskStatus::Exited => "exited",
         }
     }
 
@@ -24,8 +26,10 @@ impl TaskStatus {
         match s {
             "running" => Ok(TaskStatus::Running),
             "completed" => Ok(TaskStatus::Completed),
-            "needs_attention" => Ok(TaskStatus::NeedsAttention),
-            "failed" => Ok(TaskStatus::Failed),
+            "exited" => Ok(TaskStatus::Exited),
+            // Legacy support
+            "needs_attention" => Ok(TaskStatus::Completed),
+            "failed" => Ok(TaskStatus::Exited),
             _ => Err(format!("Invalid task status: {}", s)),
         }
     }
@@ -95,20 +99,26 @@ impl Task {
         }
     }
 
-    pub fn complete(&mut self, exit_code: Option<i32>) {
-        self.status = if exit_code.map(|c| c != 0).unwrap_or(false) {
-            TaskStatus::Failed
-        } else {
-            TaskStatus::Completed
-        };
-        self.exit_code = exit_code;
+    /// Mark task as completed (finished generating, waiting for user)
+    pub fn complete(&mut self) {
+        self.status = TaskStatus::Completed;
         self.completed_at = Some(Utc::now());
         self.updated_at = Utc::now();
     }
 
-    pub fn needs_attention(&mut self, reason: String) {
-        self.status = TaskStatus::NeedsAttention;
-        self.attention_reason = Some(reason);
+    /// Mark task as running (actively generating)
+    #[allow(dead_code)]
+    pub fn set_running(&mut self) {
+        self.status = TaskStatus::Running;
+        self.completed_at = None;
+        self.updated_at = Utc::now();
+    }
+
+    /// Mark task as exited (closed/terminated)
+    pub fn set_exited(&mut self, exit_code: Option<i32>) {
+        self.status = TaskStatus::Exited;
+        self.exit_code = exit_code;
+        self.completed_at = Some(Utc::now());
         self.updated_at = Utc::now();
     }
 }
@@ -149,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    fn test_task_completion_success() {
+    fn test_task_complete() {
         let mut task = Task::new(
             "test-id".to_string(),
             "claude_code".to_string(),
@@ -158,14 +168,13 @@ mod tests {
             None,
         );
 
-        task.complete(Some(0));
+        task.complete();
         assert_eq!(task.status, TaskStatus::Completed);
-        assert_eq!(task.exit_code, Some(0));
         assert!(task.completed_at.is_some());
     }
 
     #[test]
-    fn test_task_completion_failure() {
+    fn test_task_exited() {
         let mut task = Task::new(
             "test-id".to_string(),
             "claude_code".to_string(),
@@ -174,13 +183,13 @@ mod tests {
             None,
         );
 
-        task.complete(Some(1));
-        assert_eq!(task.status, TaskStatus::Failed);
+        task.set_exited(Some(1));
+        assert_eq!(task.status, TaskStatus::Exited);
         assert_eq!(task.exit_code, Some(1));
     }
 
     #[test]
-    fn test_needs_attention() {
+    fn test_task_resume() {
         let mut task = Task::new(
             "test-id".to_string(),
             "claude_code".to_string(),
@@ -189,31 +198,29 @@ mod tests {
             None,
         );
 
-        task.needs_attention("Waiting for input".to_string());
-        assert_eq!(task.status, TaskStatus::NeedsAttention);
-        assert_eq!(task.attention_reason, Some("Waiting for input".to_string()));
+        task.complete();
+        assert_eq!(task.status, TaskStatus::Completed);
+
+        task.set_running();
+        assert_eq!(task.status, TaskStatus::Running);
+        assert!(task.completed_at.is_none());
     }
 
     #[test]
     fn test_status_serialization() {
         assert_eq!(TaskStatus::Running.as_str(), "running");
         assert_eq!(TaskStatus::Completed.as_str(), "completed");
-        assert_eq!(TaskStatus::NeedsAttention.as_str(), "needs_attention");
-        assert_eq!(TaskStatus::Failed.as_str(), "failed");
+        assert_eq!(TaskStatus::Exited.as_str(), "exited");
     }
 
     #[test]
     fn test_status_deserialization() {
         assert_eq!(TaskStatus::from_str("running").unwrap(), TaskStatus::Running);
-        assert_eq!(
-            TaskStatus::from_str("completed").unwrap(),
-            TaskStatus::Completed
-        );
-        assert_eq!(
-            TaskStatus::from_str("needs_attention").unwrap(),
-            TaskStatus::NeedsAttention
-        );
-        assert_eq!(TaskStatus::from_str("failed").unwrap(), TaskStatus::Failed);
+        assert_eq!(TaskStatus::from_str("completed").unwrap(), TaskStatus::Completed);
+        assert_eq!(TaskStatus::from_str("exited").unwrap(), TaskStatus::Exited);
+        // Legacy support
+        assert_eq!(TaskStatus::from_str("needs_attention").unwrap(), TaskStatus::Completed);
+        assert_eq!(TaskStatus::from_str("failed").unwrap(), TaskStatus::Exited);
         assert!(TaskStatus::from_str("invalid").is_err());
     }
 }

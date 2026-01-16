@@ -170,48 +170,16 @@ function isGenerating() {
   return false;
 }
 
-// Check if there's a visible input textarea (Claude asking for input)
-function isWaitingForUserInput() {
-  // Look for input textarea that's visible and enabled
-  const textareas = document.querySelectorAll('textarea');
-  for (const textarea of textareas) {
-    if (!textarea.disabled && textarea.offsetParent !== null) {
-      // Check if it's the main input (not some other textarea)
-      const placeholder = textarea.placeholder || '';
-      if (placeholder.toLowerCase().includes('reply') ||
-          placeholder.toLowerCase().includes('message') ||
-          placeholder.toLowerCase().includes('type')) {
-        debugLog("Found input textarea - waiting for user");
-        return true;
-      }
-    }
-  }
-
-  // Look for "Continue" or similar buttons (Claude asking to continue)
-  const continueButtons = document.querySelectorAll('button');
-  for (const btn of continueButtons) {
-    const text = btn.textContent?.trim().toLowerCase() || '';
-    if ((text === 'continue' || text.includes('continue')) && btn.offsetParent !== null) {
-      debugLog("Found continue button - needs user action");
-      return true;
-    }
-  }
-
-  return false;
-}
-
 // Main check function
 function checkConversationState() {
   const conversationId = getConversationId();
   const isActive = isGenerating();
   const title = getConversationTitle();
 
+  // Simple 3-state tracking:
+  // - isActive=true → running (generating)
+  // - isActive=false → completed (waiting for user input)
   tracker.checkState(conversationId, isActive, title);
-
-  // Check for waiting state (Claude-specific)
-  if (!isActive && isWaitingForUserInput() && tracker.activeConversation) {
-    tracker.markNeedsAttention("waiting_for_user_input");
-  }
 }
 
 // URL change detection
@@ -235,15 +203,11 @@ window.diagnoseClaude = function() {
   const isActive = isGenerating();
   console.log("Is generating:", isActive);
 
-  const waitingForInput = isWaitingForUserInput();
-  console.log("Waiting for input:", waitingForInput);
-
   const title = getConversationTitle();
   console.log("Conversation title:", title);
 
   console.log("\n=== Tracker State ===");
   console.log("Active conversation:", tracker.activeConversation);
-  console.log("Is transitioning:", tracker.isTransitioning);
 
   console.log("\n=== DOM Elements Check ===");
   console.log("Total buttons:", document.querySelectorAll('button').length);
