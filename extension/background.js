@@ -8,6 +8,39 @@ const NATIVE_HOST_NAME = "com.agent_tasks.bridge";
 // Connection to native messaging host
 let nativePort = null;
 
+// Agent type display names
+const AGENT_NAMES = {
+  "gemini_web": "Gemini",
+  "claude_web": "Claude",
+  "claude_code": "Claude Code",
+  "opencode": "OpenCode"
+};
+
+// Show desktop notification when task completes
+function showCompletionNotification(agentType, title) {
+  const agentName = AGENT_NAMES[agentType] || agentType;
+  const notificationTitle = `${agentName} - Finished`;
+  const notificationBody = title ? title.substring(0, 100) : "Task completed";
+
+  chrome.notifications.create({
+    type: "basic",
+    iconUrl: "icons/icon128.png",
+    title: notificationTitle,
+    message: notificationBody,
+    priority: 1
+  }, (notificationId) => {
+    if (chrome.runtime.lastError) {
+      console.error("Notification error:", chrome.runtime.lastError);
+    } else {
+      console.log("Notification shown:", notificationId);
+      // Auto-close after 5 seconds
+      setTimeout(() => {
+        chrome.notifications.clear(notificationId);
+      }, 5000);
+    }
+  });
+}
+
 // Connect to native messaging host
 function connectToNativeHost() {
   try {
@@ -82,6 +115,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "task_update") {
     // Forward to native host
     sendToNativeHost(message);
+
+    // Show notification when task completes
+    if (message.status === "completed") {
+      showCompletionNotification(message.agent_type, message.title);
+    }
+
     sendResponse({ status: "ok" });
   } else if (message.type === "ping") {
     sendResponse({ status: "ok", connected: nativePort !== null });

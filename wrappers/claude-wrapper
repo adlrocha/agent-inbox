@@ -1,6 +1,10 @@
 #!/bin/bash
 # Wrapper for Claude Code CLI to track tasks in agent-inbox
-# This wrapper transparently intercepts claude commands and reports to agent-inbox
+# Creates task and exports AGENT_TASK_ID for hooks to use
+# Hooks handle: running (UserPromptSubmit), completed (Stop), exited (SessionEnd)
+
+# agent-inbox binary location
+AGENT_INBOX="${AGENT_INBOX_BIN:-$HOME/.local/bin/agent-inbox}"
 
 # Find the original claude binary
 CLAUDE_BIN=$(which -a claude | grep -v "$(readlink -f "$0")" | head -n 1)
@@ -10,40 +14,34 @@ if [ -z "$CLAUDE_BIN" ]; then
     exit 1
 fi
 
-# Generate unique task ID
-TASK_ID=$(uuidgen)
+# Generate unique task ID and export for hooks
+export AGENT_TASK_ID=$(uuidgen)
 
-# Export task ID so Claude hooks can access it
-export AGENT_TASK_ID="$TASK_ID"
-
-# Capture the command arguments for the title
-if [ $# -eq 0 ]; then
-    TASK_TITLE="claude (interactive)"
-else
-    # Truncate to 100 chars
-    TASK_TITLE="claude $*"
-    TASK_TITLE="${TASK_TITLE:0:100}"
+# Get repo info if in a git repository
+REPO_NAME=""
+REPO_BRANCH=""
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    REPO_NAME=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null)
+    REPO_BRANCH=$(git branch --show-current 2>/dev/null)
 fi
 
-# Register task as 'running' with process tracking
-agent-inbox report start "$TASK_ID" "claude_code" "$PWD" "$TASK_TITLE" --pid $$ --ppid $PPID 2>/dev/null || {
-    echo "Warning: Failed to register task with agent-inbox" >&2
-}
+# Build task title with repo/directory info
+if [ -n "$REPO_NAME" ]; then
+    # In a git repo - show repo name and branch
+    TASK_TITLE="[$REPO_NAME"
+    [ -n "$REPO_BRANCH" ] && TASK_TITLE="$TASK_TITLE:$REPO_BRANCH"
+    TASK_TITLE="$TASK_TITLE]"
+else
+    # Not in a git repo - show directory name
+    DIR_NAME=$(basename "$PWD")
+    TASK_TITLE="[$DIR_NAME]"
+fi
 
-# Start background monitor to detect attention needs
-# The monitor will detect if the process is waiting for input or stalled
-agent-inbox monitor "$TASK_ID" $$ >/dev/null 2>&1 &
-MONITOR_PID=$!
+# Truncate to 100 chars
+TASK_TITLE="${TASK_TITLE:0:100}"
 
-# Run actual claude command with all args, preserving all I/O
-# Use direct execution (not exec) so we can capture exit code
-"$CLAUDE_BIN" "$@"
-EXIT_CODE=$?
+# Register task as 'running'
+agent-inbox report start "$AGENT_TASK_ID" "claude_code" "$PWD" "$TASK_TITLE" 2>/dev/null || true
 
-# Kill monitor (it may have already detected completion and exited)
-kill $MONITOR_PID 2>/dev/null || true
-
-# Report completion (in case monitor didn't catch it, or we beat it)
-agent-inbox report complete "$TASK_ID" --exit-code "$EXIT_CODE" 2>/dev/null || true
-
-exit $EXIT_CODE
+# Run claude - hooks handle status updates
+exec "$CLAUDE_BIN" "$@"

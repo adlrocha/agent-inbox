@@ -5,7 +5,8 @@
   "description": "Track tasks from web-based AI agents (Claude, Gemini) in agent-inbox",
   "permissions": [
     "nativeMessaging",
-    "storage"
+    "storage",
+    "notifications"
   ],
   "host_permissions": [
     "https://claude.ai/*",

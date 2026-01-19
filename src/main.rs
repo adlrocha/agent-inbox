@@ -171,6 +171,24 @@ fn main() -> Result<()> {
                 db.update_task(&task)?;
                 println!("Task completed: {}", task_id);
             }
+            ReportAction::Running { task_id } => {
+                let mut task = db
+                    .get_task_by_id(&task_id)?
+                    .ok_or_else(|| anyhow::anyhow!("Task not found: {}", task_id))?;
+
+                task.set_running();
+                db.update_task(&task)?;
+                println!("Task running: {}", task_id);
+            }
+            ReportAction::Exited { task_id, exit_code } => {
+                let mut task = db
+                    .get_task_by_id(&task_id)?
+                    .ok_or_else(|| anyhow::anyhow!("Task not found: {}", task_id))?;
+
+                task.set_exited(exit_code);
+                db.update_task(&task)?;
+                println!("Task exited: {}", task_id);
+            }
         },
         Some(Commands::Monitor { task_id, pid }) => {
             // Create a monitor and start monitoring

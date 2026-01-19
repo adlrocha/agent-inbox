@@ -103,4 +103,20 @@ pub enum ReportAction {
         #[arg(long)]
         exit_code: Option<i32>,
     },
+
+    /// Report task is running (generating)
+    Running {
+        /// Task ID
+        task_id: String,
+    },
+
+    /// Report task has exited (process terminated)
+    Exited {
+        /// Task ID
+        task_id: String,
+
+        /// Exit code
+        #[arg(long)]
+        exit_code: Option<i32>,
+    },
 }

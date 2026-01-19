@@ -5,13 +5,19 @@ A CLI-first notification system that tracks tasks across multiple LLM/coding age
 ## Features
 
 - **Unified Task Tracking**: Track tasks across different AI agents in one place
+- **3-State Model**: Simple, reliable status tracking (Running → Completed → Exited)
+- **Desktop Notifications**: Get notified when agents finish generating
 - **Transparent Wrappers**: Auto-track CLI agents without changing your workflow
-- **Parallel Tracking**: Monitor multiple instances of the same agent simultaneously
-- **Simple CLI Interface**: View, manage, and monitor tasks from the command line
-- **Automatic Cleanup**: Completed tasks auto-delete after 1 hour (configurable)
-- **Background Monitoring**: Detect when tasks need attention (stdin, stalls)
+- **Browser Extension**: Track Claude.ai and Gemini conversations
+- **Repo-Aware**: Shows git repo and branch in task titles for CLI agents
+- **Auto-Reset on Restart**: Clears stale tasks automatically on login
 - **SQLite Backend**: Fast, reliable, and concurrent-safe storage
-- **Extensible**: Easy template for wrapping any CLI coding agent
+
+## Task States
+
+- **Running**: Agent is actively generating output
+- **Completed**: Agent finished generating, waiting for user input
+- **Exited**: Agent/tab closed or process terminated
 
 ## Installation
 
@@ -23,69 +29,103 @@ A CLI-first notification system that tracks tasks across multiple LLM/coding age
 ### Build and Install
 
 ```bash
-# Clone the repository
 cd /path/to/agent-notifications
 
-# Install
-./install.sh
+# Build
+cargo build --release
+
+# Install binaries
+cp target/release/agent-inbox ~/.local/bin/
+cp target/release/agent-bridge ~/.local/bin/
 ```
 
-This will:
-1. Build the release binary
-2. Install `agent-inbox` to `/usr/local/bin/` (or `~/.local/bin/` if no sudo)
-3. Create `~/.agent-tasks/` directory
+## Setup Scripts
 
-### Phase 2: Set Up Wrappers (Automatic Tracking)
+### 1. Claude Code Wrapper
 
-After installing the core CLI, set up wrappers to automatically track your coding agents:
+The wrapper enables automatic task tracking for Claude Code CLI:
 
 ```bash
-# Set up wrappers for detected agents
-./setup-wrappers.sh
+# Copy wrapper to your path
+mkdir -p ~/.agent-tasks/wrappers
+cp wrappers/claude-wrapper ~/.agent-tasks/wrappers/
 
-# Reload your shell
-source ~/.bashrc  # or ~/.zshrc
+# Add alias to your shell RC (~/.bashrc or ~/.zshrc)
+alias claude='~/.agent-tasks/wrappers/claude-wrapper'
 
-# Test it
-claude --help  # Should now be tracked
-agent-inbox list --all
+# Reload shell
+source ~/.bashrc
 ```
 
-The setup script will:
-1. Detect which agents are installed (claude, opencode, etc.)
-2. Install wrapper scripts to `~/.agent-tasks/wrappers/`
-3. Add transparent aliases to your shell RC file
-4. Create backups of original binaries
+The wrapper:
+- Creates a task when Claude starts
+- Exports `AGENT_TASK_ID` for hooks to use
+- Shows `[repo:branch]` in task title when in a git repo
 
-**Supported agents out of the box:**
-- Claude Code (`claude`)
-- OpenCode (`opencode`)
+### 2. Claude Code Hooks
 
-**Want to wrap other agents?** See [WRAPPING_AGENTS.md](WRAPPING_AGENTS.md) for a complete guide on wrapping Cursor, Aider, Windsurf, or any other CLI agent.
-
-### Phase 3: Install Browser Extension (Optional - For Web LLMs)
-
-To track Claude.ai and Gemini conversations:
+Run the setup script to install hooks globally:
 
 ```bash
-# Install extension and native messaging host
-./install-extension.sh
+./scripts/setup-claude-hooks.sh
+```
 
-# Follow prompts to:
-# 1. Load extension in browser (chrome://extensions)
-# 2. Copy extension ID
+This installs hooks to `~/.claude/settings.json` that:
+- **UserPromptSubmit**: Mark task as "running" when you send a prompt
+- **Stop**: Mark task as "completed" + desktop notification when Claude finishes
+- **SessionEnd**: Mark task as "exited" when you exit Claude Code
+
+**Note**: Restart Claude Code after installing hooks for them to take effect.
+
+### 3. Auto-Reset on Login/Restart
+
+Automatically clear stale tasks when you log in:
+
+```bash
+./scripts/setup-auto-reset.sh
+```
+
+This creates a systemd user service that runs `agent-inbox reset --force` on each login.
+
+To disable: `systemctl --user disable agent-inbox-reset.service`
+
+### 4. Browser Extension (Claude.ai & Gemini)
+
+To track web-based agents:
+
+```bash
+# 1. Load extension in browser
+#    - Go to chrome://extensions (or brave://extensions)
+#    - Enable "Developer mode"
+#    - Click "Load unpacked" and select the `extension/` directory
+
+# 2. Get extension ID from the extensions page
+
 # 3. Update native messaging manifest
-# 4. Reload extension
-```
+mkdir -p ~/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts/
+# (or ~/.config/google-chrome/NativeMessagingHosts/ for Chrome)
 
-See [EXTENSION.md](EXTENSION.md) for detailed installation guide and troubleshooting.
+cat > ~/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.agent_tasks.bridge.json << EOF
+{
+  "name": "com.agent_tasks.bridge",
+  "description": "Native messaging host for Agent Inbox extension",
+  "path": "$HOME/.local/bin/agent-bridge",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://YOUR_EXTENSION_ID/"
+  ]
+}
+EOF
+
+# 4. Reload the extension
+```
 
 ## Usage
 
 ### Basic Commands
 
 ```bash
-# Show tasks needing attention (default)
+# Show running tasks (default)
 agent-inbox
 
 # List all tasks
@@ -93,9 +133,8 @@ agent-inbox list --all
 
 # List tasks by status
 agent-inbox list --status running
-agent-inbox list --status needs_attention
 agent-inbox list --status completed
-agent-inbox list --status failed
+agent-inbox list --status exited
 
 # Show detailed task information
 agent-inbox show <task-id>
@@ -103,8 +142,11 @@ agent-inbox show <task-id>
 # Clear a specific task
 agent-inbox clear <task-id>
 
-# Clear all completed and failed tasks
+# Clear all completed and exited tasks
 agent-inbox clear-all
+
+# Force clear ALL tasks (useful when stuck)
+agent-inbox reset --force
 
 # Watch tasks in real-time (refreshes every 2s)
 agent-inbox watch
@@ -113,102 +155,76 @@ agent-inbox watch
 agent-inbox cleanup --retention-secs 3600
 ```
 
-### Manual Task Reporting (Phase 1)
-
-You can manually report task status using the `report` subcommand:
+### Manual Task Reporting
 
 ```bash
 # Start a task
 TASK_ID=$(uuidgen)
-agent-inbox report start "$TASK_ID" "claude_code" "$PWD" "My task description" --pid $$ --ppid $PPID
+agent-inbox report start "$TASK_ID" "claude_code" "$PWD" "My task description"
 
-# Mark task as needing attention
-agent-inbox report needs-attention "$TASK_ID" "Waiting for user input"
+# Mark task as running (generating)
+agent-inbox report running "$TASK_ID"
 
-# Complete a task
-agent-inbox report complete "$TASK_ID" --exit-code 0
+# Mark task as completed (finished generating)
+agent-inbox report complete "$TASK_ID"
 
-# Report task failure
-agent-inbox report failed "$TASK_ID" 1
+# Mark task as exited (process terminated)
+agent-inbox report exited "$TASK_ID" --exit-code 0
 ```
+
+## Scripts Reference
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/setup-claude-hooks.sh` | Install Claude Code hooks globally (~/.claude/settings.json) |
+| `scripts/setup-auto-reset.sh` | Install systemd service for auto-reset on login |
+| `wrappers/claude-wrapper` | Wrapper script for Claude Code CLI |
+| `wrappers/opencode-wrapper` | Wrapper script for OpenCode CLI |
 
 ## Architecture
 
 ```
-┌─────────────────────────────────┐
-│     User CLI Commands           │
-└───────────┬─────────────────────┘
-            │
-    ┌───────▼────────┐
-    │  agent-inbox   │  (Rust binary)
-    └───────┬────────┘
-            │
-    ┌───────▼────────┐
-    │  SQLite DB     │  (~/.agent-tasks/tasks.db)
-    └────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                        User                                   │
+└──────────────────────────────────────────────────────────────┘
+          │                    │                    │
+          ▼                    ▼                    ▼
+┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+│  Claude Code     │  │  Claude.ai       │  │  Gemini          │
+│  (wrapper+hooks) │  │  (extension)     │  │  (extension)     │
+└────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘
+         │                     │                     │
+         │                     ▼                     │
+         │            ┌──────────────────┐           │
+         │            │  agent-bridge    │           │
+         │            │  (native msg)    │           │
+         │            └────────┬─────────┘           │
+         │                     │                     │
+         ▼                     ▼                     ▼
+┌──────────────────────────────────────────────────────────────┐
+│                      agent-inbox CLI                          │
+└──────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+                    ┌──────────────────┐
+                    │    SQLite DB     │
+                    │ ~/.agent-tasks/  │
+                    └──────────────────┘
 ```
-
-### Database Schema
-
-```sql
-CREATE TABLE tasks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    task_id TEXT UNIQUE NOT NULL,          -- UUID
-    agent_type TEXT NOT NULL,               -- 'claude_web', 'gemini_web', 'claude_code', etc.
-    title TEXT NOT NULL,                    -- First 100 chars of prompt
-    status TEXT NOT NULL,                   -- 'running', 'completed', 'needs_attention', 'failed'
-    created_at INTEGER NOT NULL,            -- Unix timestamp
-    updated_at INTEGER NOT NULL,
-    completed_at INTEGER,                   -- Timestamp when finished
-    pid INTEGER,                            -- Process ID for CLI tools
-    ppid INTEGER,                           -- Parent process ID
-    monitor_pid INTEGER,                    -- Background monitor process ID
-    attention_reason TEXT,                  -- Why it needs attention
-    exit_code INTEGER,                      -- Exit code when completed/failed
-    context TEXT,                           -- JSON: {url, project_path, session_id}
-    metadata TEXT                           -- JSON: agent-specific data
-);
-```
-
-### Task States
-
-- **running**: Task in progress
-- **completed**: Finished successfully (auto-cleared after 1 hour)
-- **needs_attention**: Waiting for user input/approval
-- **failed**: Errored out
 
 ## Development
 
-### Run Tests
-
 ```bash
+# Run tests
 cargo test
-```
 
-All tests should pass:
-- Unit tests for task model
-- Unit tests for database operations
-- Integration tests for CLI commands
-
-### Build for Development
-
-```bash
+# Build for development
 cargo build
-./target/debug/agent-inbox --help
+
+# Build release
+cargo build --release
 ```
-
-## Configuration
-
-Default configuration (future):
-- **Database**: `~/.agent-tasks/tasks.db`
-- **Cleanup retention**: 3600 seconds (1 hour) for completed tasks
-- **Wrappers directory**: `~/.agent-tasks/wrappers/`
-
-## Contributing
-
-This is a personal project, but suggestions and improvements are welcome!
 
 ## License
 
 Apache 2.0
-

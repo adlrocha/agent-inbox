@@ -1,12 +1,11 @@
 {
   "hooks": {
-    "Notification": [
+    "UserPromptSubmit": [
       {
-        "matcher": "idle_prompt",
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -n \"$AGENT_TASK_ID\" ]; then agent-inbox report complete \"$AGENT_TASK_ID\"; fi",
+            "command": "if [ -n \"$AGENT_TASK_ID\" ]; then agent-inbox report running \"$AGENT_TASK_ID\" 2>/dev/null; fi",
             "timeout": 5
           }
         ]
@@ -17,7 +16,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -n \"$AGENT_TASK_ID\" ]; then agent-inbox report complete \"$AGENT_TASK_ID\"; fi",
+            "command": "if [ -n \"$AGENT_TASK_ID\" ]; then agent-inbox report complete \"$AGENT_TASK_ID\" && notify-send 'Claude Code' 'Finished generating' 2>/dev/null; fi",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -n \"$AGENT_TASK_ID\" ]; then agent-inbox report exited \"$AGENT_TASK_ID\" 2>/dev/null; fi",
             "timeout": 5
           }
         ]
