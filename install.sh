@@ -206,8 +206,9 @@ elif command -v musl-gcc >/dev/null 2>&1; then
             --manifest-path "$REPO_DIR/Cargo.toml" \
             --target x86_64-unknown-linux-musl \
         && cp "$REPO_DIR/target/x86_64-unknown-linux-musl/release/nibble" \
-              "$BIN_DIR/nibble-musl" \
-        && chmod +x "$BIN_DIR/nibble-musl" \
+              "$BIN_DIR/nibble-musl.new" \
+        && chmod +x "$BIN_DIR/nibble-musl.new" \
+        && mv -f "$BIN_DIR/nibble-musl.new" "$BIN_DIR/nibble-musl" \
         && ok "nibble-musl (static, for containers)" \
         || warn "musl build failed — container hooks won't send Telegram notifications"
 else
@@ -227,8 +228,9 @@ if systemctl --user is-active --quiet nibble-listener.service 2>/dev/null; then
     ok "Stopped nibble-listener.service for upgrade"
 fi
 
-cp "$REPO_DIR/target/release/nibble" "$BIN_DIR/nibble"
-chmod +x "$BIN_DIR/nibble"
+cp "$REPO_DIR/target/release/nibble" "$BIN_DIR/nibble.new"
+chmod +x "$BIN_DIR/nibble.new"
+mv -f "$BIN_DIR/nibble.new" "$BIN_DIR/nibble"
 ok "nibble"
 
 

@@ -113,6 +113,7 @@ mkdir -p "$CONFIG_DIR"
 {
     echo '[telegram]'
     echo 'enabled = true'
+    echo 'notifications = true'
     echo "bot_token = \"$BOT_TOKEN\""
     echo "chat_id = \"$CHAT_ID\""
     if [ -n "$USERNAME" ]; then

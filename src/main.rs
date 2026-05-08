@@ -49,6 +49,13 @@ fn main() -> Result<()> {
                 return Ok(());
             }
 
+            if !cfg.telegram.notifications {
+                // Agent-triggered notifications are disabled by the user.
+                // Telegram listener messages (injection completions, heartbeats,
+                // cron alerts) bypass this and call the API directly.
+                return Ok(());
+            }
+
             // Build the notification text: header with task context + message body.
             let text = build_notification_text(&db, task_id.as_deref(), &message, attention)?;
 
@@ -319,6 +326,7 @@ fn main() -> Result<()> {
             cli::SessionAction::List {
                 agent,
                 repo,
+                sandbox,
                 today,
                 yesterday,
                 week,
@@ -326,6 +334,12 @@ fn main() -> Result<()> {
                 last,
                 limit,
             } => {
+                // Resolve --sandbox path using the same semantics as attach/spawn/kill.
+                let sandbox_repo = if let Some(ref input) = sandbox {
+                    Some(resolve_sandbox_repo_path(input)?)
+                } else {
+                    None
+                };
                 // Compute date filter
                 let date_range = if today {
                     let local_now = chrono::Local::now();
@@ -420,6 +434,28 @@ fn main() -> Result<()> {
                         }
                     }
                 }
+
+                // When --sandbox is given, filter groups to exact repo matches.
+                let groups = if let Some(ref repo) = sandbox_repo {
+                    let mut filtered = groups;
+                    for group in &mut filtered {
+                        group.sessions.retain(|s| {
+                            let resolved_repo = match s.agent.as_str() {
+                                "claude" => claude_task_repo.get(&s.session_id).cloned(),
+                                "opencode" => opencode_task_repo.get(&s.session_id).cloned(),
+                                "pi" => pi_task_repo
+                                    .get(&s.path.to_string_lossy().to_string())
+                                    .cloned(),
+                                _ => None,
+                            };
+                            resolved_repo.as_deref() == Some(repo)
+                        });
+                    }
+                    filtered.retain(|g| !g.sessions.is_empty());
+                    filtered
+                } else {
+                    groups
+                };
 
                 // Compute max title width for alignment
                 let mut max_title_width = 40;
@@ -2619,6 +2655,26 @@ fn cmd_sandbox_list(db: &Database) -> Result<()> {
 ///
 /// For repo paths the canonical absolute path is looked up in the container_state table,
 /// returning the most recently spawned sandbox for that repo.
+
+/// Resolve a user-supplied path to its canonical absolute form.
+///
+/// Uses the same expansion and canonicalization rules as `resolve_sandbox_id`
+/// but does not require a sandbox to exist.  Used by `nibble session list --sandbox`.
+fn resolve_sandbox_repo_path(input: &str) -> Result<String> {
+    let expanded = if let Some(rest) = input.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            format!("{}/{}", home, rest)
+        } else {
+            input.to_string()
+        }
+    } else {
+        input.to_string()
+    };
+    let canonical = std::fs::canonicalize(&expanded)
+        .with_context(|| format!("Cannot resolve path: {}", input))?;
+    Ok(canonical.to_string_lossy().to_string())
+}
+
 fn resolve_sandbox_id(db: &Database, input: &str) -> Result<String> {
     // Heuristic: treat as a path if it looks like one or actually exists on disk.
     let looks_like_path = input.starts_with('.')

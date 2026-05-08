@@ -517,6 +517,9 @@ pub enum SessionAction {
         /// Filter by repo/workspace path substring
         #[arg(short, long)]
         repo: Option<String>,
+        /// Filter to sessions for a specific sandbox repo (same path resolution as attach)
+        #[arg(long)]
+        sandbox: Option<String>,
         /// Show only sessions from today
         #[arg(long, group = "date_filter")]
         today: bool,

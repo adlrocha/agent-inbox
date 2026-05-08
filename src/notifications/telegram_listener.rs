@@ -823,37 +823,67 @@ fn inject_with_heartbeat(
     };
 
     let mut hook_notified = false;
-    for i in 0..STOP_HOOK_TIMEOUT_SECS {
-        thread::sleep(Duration::from_secs(1));
-        let count_now = db
-            .bot_message_count_for_task(task_id)
-            .unwrap_or(messages_before);
-        if count_now > messages_before {
-            hook_notified = true;
-            eprintln!(
-                "[listen] Stop hook notified after {}s, suppressing safety-net",
-                i + 1
-            );
-            break;
+    if config.notifications {
+        // Agent notifications are enabled — the Stop hook may have fired.
+        // Wait briefly to see if it sent a notification so we avoid duplicates.
+        for i in 0..STOP_HOOK_TIMEOUT_SECS {
+            thread::sleep(Duration::from_secs(1));
+            let count_now = db
+                .bot_message_count_for_task(task_id)
+                .unwrap_or(messages_before);
+            if count_now > messages_before {
+                hook_notified = true;
+                eprintln!(
+                    "[listen] Stop hook notified after {}s, suppressing safety-net",
+                    i + 1
+                );
+                break;
+            }
         }
+    } else {
+        // Agent notifications are disabled — the Stop hook is a no-op, so
+        // there's nothing to wait for. Send the output immediately.
+        eprintln!("[listen] notifications disabled, skipping Stop-hook wait");
     }
 
     if !hook_notified {
-        // Stop hook didn't send a notification — send a fallback notification.
-        eprintln!("[listen] safety-net: Stop hook didn't notify for {short_id}, sending fallback");
+        // Send the completion message. When notifications are enabled this is a
+        // safety-net fallback (the hook didn't fire). When disabled this is the
+        // primary path because the hook is a no-op.
+        eprintln!("[listen] safety-net: sending completion for {short_id}");
         let elapsed_str = if elapsed.as_secs() < 60 {
             format!("{}s", elapsed.as_secs())
         } else {
             format!("{}m {}s", elapsed.as_secs() / 60, elapsed.as_secs() % 60)
         };
 
-        // If the process exited with an error, report that instead of "complete".
+        // Try to extract the actual last assistant message from the session file
+        // so the Telegram response contains real output instead of a generic banner.
+        let output = crate::session::last_assistant_message_for_task(task);
+
         let msg = if !success {
             if let Some(code) = exit_code {
-                format!("❌ Agent exited with error (code {code}) after {elapsed_str}")
+                if let Some(out) = output {
+                    format!("❌ Agent exited with error (code {code}) after {elapsed_str}\n\n{out}")
+                } else {
+                    format!("❌ Agent exited with error (code {code}) after {elapsed_str}")
+                }
             } else {
-                format!("❌ Agent exited with error after {elapsed_str}")
+                if let Some(out) = output {
+                    format!("❌ Agent exited with error after {elapsed_str}\n\n{out}")
+                } else {
+                    format!("❌ Agent exited with error after {elapsed_str}")
+                }
             }
+        } else if let Some(out) = output {
+            // Truncate to ~3000 chars so we stay well under Telegram's 4096 limit
+            // after the header is prepended by build_notification_text.
+            let truncated = if out.chars().count() > 3000 {
+                format!("{}…", out.chars().take(3000).collect::<String>())
+            } else {
+                out
+            };
+            format!("✅ Agent turn complete ({elapsed_str})\n\n{truncated}")
         } else {
             format!("✅ Agent turn complete ({elapsed_str})")
         };
@@ -1196,6 +1226,7 @@ mod tests {
     fn cfg(chat_id: &str, allowed_username: &str) -> TelegramConfig {
         TelegramConfig {
             enabled: true,
+            notifications: true,
             bot_token: "tok".to_string(),
             chat_id: chat_id.to_string(),
             allowed_username: allowed_username.to_string(),

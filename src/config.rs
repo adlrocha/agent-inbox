@@ -140,11 +140,17 @@ impl Default for PiConfig {
 }
 
 /// Telegram bot notification settings.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TelegramConfig {
-    /// Whether Telegram notifications are enabled.
+    /// Whether Telegram notifications are enabled at all.
     #[serde(default)]
     pub enabled: bool,
+
+    /// Whether agent-triggered notifications (Claude Stop hook, etc.) are sent.
+    /// When false, `nibble notify` is a no-op, but Telegram listener messages
+    /// (injection completions, heartbeats, cron alerts) are still sent.
+    #[serde(default = "default_true")]
+    pub notifications: bool,
 
     /// Bot token from @BotFather (e.g. "123456:ABC-DEF...").
     #[serde(default)]
@@ -159,6 +165,18 @@ pub struct TelegramConfig {
     /// match, providing a second layer of protection on top of the chat_id check.
     #[serde(default)]
     pub allowed_username: String,
+}
+
+impl Default for TelegramConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            notifications: true,
+            bot_token: String::new(),
+            chat_id: String::new(),
+            allowed_username: String::new(),
+        }
+    }
 }
 
 impl TelegramConfig {
@@ -334,6 +352,7 @@ mod tests {
     fn test_telegram_config_is_configured() {
         let cfg = TelegramConfig {
             enabled: true,
+            notifications: true,
             bot_token: "token".to_string(),
             chat_id: "123".to_string(),
             allowed_username: String::new(),
@@ -345,6 +364,7 @@ mod tests {
     fn test_telegram_config_not_configured_when_disabled() {
         let cfg = TelegramConfig {
             enabled: false,
+            notifications: true,
             bot_token: "token".to_string(),
             chat_id: "123".to_string(),
             allowed_username: String::new(),
@@ -356,6 +376,7 @@ mod tests {
     fn test_telegram_config_not_configured_when_empty_token() {
         let cfg = TelegramConfig {
             enabled: true,
+            notifications: true,
             bot_token: String::new(),
             chat_id: "123".to_string(),
             allowed_username: String::new(),
@@ -373,6 +394,7 @@ chat_id = "456789"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert!(config.telegram.is_configured());
+        assert!(config.telegram.notifications);
         assert_eq!(config.telegram.bot_token, "123:ABC");
         assert_eq!(config.telegram.chat_id, "456789");
         // allowed_username is optional — defaults to empty string
@@ -389,6 +411,7 @@ chat_id = "456789"
 allowed_username = "adlrocha"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(config.telegram.notifications);
         assert_eq!(config.telegram.allowed_username, "adlrocha");
     }
 
@@ -396,6 +419,21 @@ allowed_username = "adlrocha"
     fn test_parse_empty_toml() {
         let config: Config = toml::from_str("").unwrap();
         assert!(!config.telegram.is_configured());
+        assert!(config.telegram.notifications); // default true
+    }
+
+    #[test]
+    fn test_telegram_notifications_disabled_in_toml() {
+        let toml_str = r#"
+[telegram]
+enabled = true
+notifications = false
+bot_token = "123:ABC"
+chat_id = "456789"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(config.telegram.is_configured());
+        assert!(!config.telegram.notifications);
     }
 
     #[test]

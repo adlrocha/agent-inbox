@@ -5,33 +5,44 @@ it was deferred and what would be needed to implement it.
 
 ---
 
-## Pi Agent: Telegram Injection
+## Pi Agent: Telegram Notifications & Injection — NOT IMPLEMENTED
 
-**Context**: Pi (`AgentType::Pi`) does not have lifecycle hooks (equivalent to the
-Claude Code Stop hook) that call `nibble report session-id` or send Telegram
-completion notifications when a turn finishes.
+> **Status**: Intentionally deferred. There is no ETA.
 
-**Problem**:
-- `agent_input::inject_returning_child` is hardcoded to run `claude` — it would
-  run the wrong binary in a Pi sandbox.
-- Even if the binary were parameterised, Pi has no Stop hook to fire the completion
-  notification. The safety-net fires 30 s after the process exits, but that's the
-  entire UX — there's no per-turn "Claude finished" message from inside the agent.
-- Completion status (did pi succeed? did it need attention?) is not surfaced.
+**What works today**:
+- `nibble sandbox spawn --pi` and `nibble sandbox attach --pi` work fine for
+  interactive TUI sessions.
 
-**When to revisit**:
-- If Pi adds a `--on-exit` hook or a way to run a shell command after each turn.
-- Or if we build a thin wrapper script around `pi --print` that calls
-  `nibble notify` on exit, mimicking the Claude Stop hook pattern.
+**What does NOT work**:
+- **Telegram notifications when Pi finishes a turn.** Claude Code achieves this
+  via a `Stop` hook in `~/.claude/settings.json`. Pi has no equivalent lifecycle
+  hooks, so there is no mechanism to call `nibble notify` when an assistant turn
+  completes.
+- **Telegram reply injection into Pi sandboxes.** `nibble inject` and the Telegram
+  listener's "↩ Reply" button route to `agent_input::inject_returning_child`,
+  which is hardcoded to run `claude --resume`. Pi would need `pi --print` with
+  a post-exit epilogue that sends the completion notification.
 
-**What's needed**:
-1. Parameterise `agent_input::inject_returning_child` to accept the agent binary
-   and resume args per `AgentType` (Pi: `pi --print`, Claude: `claude --resume`).
-2. Add a Pi "epilogue" that runs `nibble notify` after `pi --print` exits, so
-   Telegram gets a completion message (similar to the opencode epilogue pattern).
-3. Route `agent_type == AgentType::Pi` to the new inject path in the Telegram
-   listener (currently Pi tasks are rejected or fall through to Claude's path).
+**Why it's hard**:
+1. Pi has no `--on-exit` hook or settings file where we can register a shell
+   command to run after each turn.
+2. Pi sessions are JSONL files with internal tree structures. Reading the "last
+   assistant message" from the outside is possible (we already do this for the
+   safety-net), but without a hook we only know the process exited — not whether
+   it finished successfully, needs attention, or is still mid-conversation.
+3. Building a wrapper script around `pi --print` would work for injection, but
+   would not help for interactive `attach` sessions where the user is in the TUI.
 
-**Current behaviour**: Pi tasks can only be interacted with via
-`nibble sandbox attach` (interactive TUI). Telegram messages to Pi sandboxes are
-silently ignored / error.
+**Possible paths forward**:
+- **Pi adds hooks**: If Pi ever supports an `--on-exit` or `--hook` flag, we can
+  wire it up exactly like Claude Code.
+- **Extension approach**: A Pi TypeScript extension could listen for turn-end
+  events and call `nibble notify` via `child_process.spawn`. This requires
+  installing an extension inside every sandbox.
+- **File-watcher approach**: A background process watches the Pi session JSONL
+  for new `"type":"message"` entries with `role:"assistant"` and calls
+  `nibble notify`. This is fragile and may fire on compaction or branching.
+
+**Current behaviour**: Pi sandboxes are invisible to Telegram. You will not
+receive completion notifications, and you cannot reply to Pi tasks from your
+phone. Use `nibble sandbox attach --pi` for all interaction.
