@@ -414,6 +414,7 @@ fn main() -> Result<()> {
                 let mut claude_session_to_task: HashMap<String, String> = HashMap::new();
                 let mut opencode_session_to_task: HashMap<String, String> = HashMap::new();
                 let mut pi_path_to_task: HashMap<String, String> = HashMap::new();
+                let home_dir = dirs::home_dir();
                 for task in &tasks {
                     if let Some(ref ctx) = task.context {
                         if let Some(ref path) = ctx.project_path {
@@ -428,8 +429,22 @@ fn main() -> Result<()> {
                             if let Some(serde_json::Value::String(ref p)) =
                                 ctx.extra.get("pi_session_path")
                             {
-                                pi_task_repo.insert(p.clone(), path.clone());
-                                pi_path_to_task.insert(p.clone(), task.task_id.clone());
+                                // pi_session_path is stored as a container path when the
+                                // sandbox attach logic discovers it. Convert it back to a
+                                // host path so it matches the paths returned by session
+                                // discovery (which scans ~/.pi on the host).
+                                let host_path = if let Some(ref home) = home_dir {
+                                    let home_str = home.to_string_lossy();
+                                    if p.starts_with("/home/node/") {
+                                        format!("{}/{}", home_str, &p["/home/node/".len()..])
+                                    } else {
+                                        p.clone()
+                                    }
+                                } else {
+                                    p.clone()
+                                };
+                                pi_task_repo.insert(host_path.clone(), path.clone());
+                                pi_path_to_task.insert(host_path, task.task_id.clone());
                             }
                         }
                     }
@@ -1223,6 +1238,37 @@ fn delete_latest_pi_session() {
                 e
             ),
         }
+    }
+}
+
+/// Discover the most recent Pi session file inside a specific running container.
+///
+/// This is more reliable than `find_pi_session_for_cwd` when multiple Pi sandboxes
+/// are active, because it looks at the session files *inside the container* rather
+/// than scanning the host's ~/.pi which is shared across all sandboxes.
+fn discover_pi_session_in_container(container_id: &str) -> Option<std::path::PathBuf> {
+    let output = std::process::Command::new("podman")
+        .args([
+            "exec",
+            container_id,
+            "sh",
+            "-c",
+            "ls -t /home/node/.pi/agent/sessions/--workspace--/*.jsonl 2>/dev/null | head -1",
+        ])
+        .output()
+        .ok()?;
+    let container_path = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    if container_path.is_empty() {
+        return None;
+    }
+    // Convert container path back to host path
+    let home = dirs::home_dir()?;
+    let host_path = container_path.replacen("/home/node/", &format!("{}/", home.display()), 1);
+    let path = std::path::PathBuf::from(host_path);
+    if path.exists() {
+        Some(path)
+    } else {
+        None
     }
 }
 
@@ -2215,6 +2261,38 @@ pub(crate) fn cmd_sandbox_spawn(
         println!();
         println!("After a system reboot, restart stopped containers with:");
         println!("  nibble sandbox resume --all");
+
+        // For Pi sandboxes spawned without attach, run a background discovery so
+        // the session is linked for `nibble session list --sandbox` even before the
+        // first attach.
+        if pi {
+            let cid = info.id.clone();
+            let tid = task_id.clone();
+            let db_path = db::default_db_path();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                if let Some(host_path) = discover_pi_session_in_container(&cid) {
+                    let home = dirs::home_dir().unwrap_or_default();
+                    let cp = if host_path.starts_with(&home) {
+                        std::path::PathBuf::from("/home/node")
+                            .join(host_path.strip_prefix(&home).unwrap_or(&host_path))
+                    } else {
+                        host_path
+                    };
+                    if let Ok(db) = Database::open(&db_path) {
+                        if let Ok(Some(mut task)) = db.get_task_by_id(&tid) {
+                            if let Some(ref mut ctx) = task.context {
+                                ctx.extra.insert(
+                                    "pi_session_path".to_string(),
+                                    serde_json::Value::String(cp.to_string_lossy().to_string()),
+                                );
+                            }
+                            let _ = db.update_task(&task);
+                        }
+                    }
+                }
+            });
+        }
     } else {
         let agent_label = if hermes {
             "Hermes"
@@ -3057,52 +3135,85 @@ fn cmd_sandbox_attach(
                 }
             } else {
                 // Prefer a stored session path from a previous attach, otherwise discover
-                // the most recent session whose cwd matches /workspace.
+                // the most recent session inside this specific container.
+                // Using container-specific discovery avoids grabbing a session from a
+                // different sandbox when multiple Pi sandboxes are active.
                 let stored_path = task
                     .context
                     .as_ref()
                     .and_then(|c| c.extra.get("pi_session_path").and_then(|v| v.as_str()));
 
-                if let Some(path_str) = stored_path {
+                let maybe_host_path = if let Some(path_str) = stored_path {
                     let cp = std::path::PathBuf::from(path_str);
                     if cp.exists() {
-                        eprintln!("  Session:   resuming stored pi session {}", cp.display());
-                        format!("{pi_install}; pi --session '{cp}'", cp = cp.display())
+                        // Convert container path to host path for comparison
+                        let home = dirs::home_dir().unwrap_or_default();
+                        let host_path = if cp.starts_with("/home/node/") {
+                            home.join(cp.strip_prefix("/home/node/").unwrap_or(cp.as_path()))
+                        } else {
+                            cp.clone()
+                        };
+                        Some((host_path, cp))
                     } else {
                         eprintln!("  Session:   stored pi session gone, re-discovering...");
-                        format!("{pi_install}; pi")
+                        None
                     }
                 } else {
-                    // Discover the correct session for this workspace
-                    match find_pi_session_for_cwd("/workspace") {
-                        Some(host_path) => {
-                            let home = dirs::home_dir().unwrap_or_default();
-                            let cp = if host_path.starts_with(&home) {
-                                std::path::PathBuf::from("/home/node")
-                                    .join(host_path.strip_prefix(&home).unwrap_or(&host_path))
-                            } else {
-                                host_path
-                            };
-                            eprintln!("  Session:   resuming pi session {}", cp.display());
-                            // Store the discovered path in task context for next attach
-                            let mut updated_task = task.clone();
-                            if let Some(ref mut ctx) = updated_task.context {
-                                ctx.extra.insert(
-                                    "pi_session_path".to_string(),
-                                    serde_json::Value::String(cp.to_string_lossy().to_string()),
-                                );
-                            }
-                            let _ = db.update_task(&updated_task);
-                            format!("{pi_install}; pi --session '{cp}'", cp = cp.display())
-                        }
-                        None => {
-                            eprintln!(
-                                "  Session:   no pi session found for /workspace, starting fresh"
-                            );
-                            format!("{pi_install}; pi")
-                        }
+                    None
+                };
+
+                let pi_cmd = if let Some((_host_path, cp)) = maybe_host_path {
+                    // Stored path exists — use it, but still refresh the DB record
+                    // so the link survives if the user switched sessions.
+                    eprintln!("  Session:   resuming stored pi session {}", cp.display());
+                    let mut updated_task = task.clone();
+                    if let Some(ref mut ctx) = updated_task.context {
+                        ctx.extra.insert(
+                            "pi_session_path".to_string(),
+                            serde_json::Value::String(cp.to_string_lossy().to_string()),
+                        );
                     }
-                }
+                    let _ = db.update_task(&updated_task);
+                    format!("{pi_install}; pi --session '{cp}'", cp = cp.display())
+                } else {
+                    // Try container-specific discovery first, then fall back to global scan
+                    let cid = task.container_id.as_deref().unwrap_or("");
+                    let discovered = if !cid.is_empty() {
+                        discover_pi_session_in_container(cid)
+                    } else {
+                        None
+                    };
+                    let host_path = if let Some(host_path) = discovered {
+                        Some(host_path)
+                    } else {
+                        find_pi_session_for_cwd("/workspace")
+                    };
+                    if let Some(host_path) = host_path {
+                        let home = dirs::home_dir().unwrap_or_default();
+                        let cp = if host_path.starts_with(&home) {
+                            std::path::PathBuf::from("/home/node")
+                                .join(host_path.strip_prefix(&home).unwrap_or(&host_path))
+                        } else {
+                            host_path
+                        };
+                        eprintln!("  Session:   resuming pi session {}", cp.display());
+                        let mut updated_task = task.clone();
+                        if let Some(ref mut ctx) = updated_task.context {
+                            ctx.extra.insert(
+                                "pi_session_path".to_string(),
+                                serde_json::Value::String(cp.to_string_lossy().to_string()),
+                            );
+                        }
+                        let _ = db.update_task(&updated_task);
+                        format!("{pi_install}; pi --session '{cp}'", cp = cp.display())
+                    } else {
+                        eprintln!(
+                            "  Session:   no pi session found for /workspace, starting fresh"
+                        );
+                        format!("{pi_install}; pi")
+                    }
+                };
+                pi_cmd
             }
         }
         SelectedAgent::OpenCode => {
