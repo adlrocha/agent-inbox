@@ -7,6 +7,7 @@ mod db;
 mod memory;
 mod models;
 mod notifications;
+mod privacy_filter;
 mod sandbox;
 mod session;
 
@@ -570,6 +571,19 @@ fn main() -> Result<()> {
             let zip_path = PathBuf::from(path);
             backup::import_backup(&zip_path)?;
         }
+        Commands::Proxy { action } => match action {
+            cli::ProxyAction::Start => {
+                let cfg = config::load().unwrap_or_default();
+                privacy_filter::start_proxy(&cfg.privacy_filter)?;
+            }
+            cli::ProxyAction::Stop => {
+                privacy_filter::stop_proxy()?;
+            }
+            cli::ProxyAction::Status => {
+                let cfg = config::load().unwrap_or_default();
+                privacy_filter::proxy_status(cfg.privacy_filter.proxy_port);
+            }
+        },
         Commands::Cron { action } => match action {
             CronAction::Add {
                 repo,
@@ -1376,6 +1390,21 @@ fn cmd_hermes_spawn_internal(db: &Database) -> Result<String> {
         }
     }
 
+    // Redirect LLM API traffic through the privacy filter proxy if enabled.
+    {
+        let pf_cfg = config::load().unwrap_or_default().privacy_filter;
+        if pf_cfg.enabled {
+            let proxy_url = privacy_filter::proxy_endpoint(pf_cfg.proxy_port);
+            if std::env::var("ANTHROPIC_BASE_URL").is_err() {
+                env_vars.insert("ANTHROPIC_BASE_URL".to_string(), proxy_url.clone());
+            }
+            if std::env::var("OPENAI_BASE_URL").is_err() {
+                env_vars.insert("OPENAI_BASE_URL".to_string(), proxy_url.clone());
+            }
+            env_vars.insert("BASE_URL".to_string(), proxy_url);
+        }
+    }
+
     let mut extra_volumes = Vec::new();
 
     // INV-5: Always mount ~/.hermes/ so sessions/memories persist
@@ -1471,6 +1500,26 @@ fn cmd_hermes_spawn_internal(db: &Database) -> Result<String> {
     std::fs::create_dir_all(&workspace_dir)?;
     println!("Spawning Hermes sandbox…");
     let info = sandbox.spawn(&task_id, &workspace_dir, &sb_config)?;
+
+    // Ensure privacy filter proxy is running if enabled.
+    {
+        let pf_cfg = config::load().unwrap_or_default().privacy_filter;
+        if pf_cfg.enabled {
+            if let Err(e) = privacy_filter::ensure_proxy_running(&pf_cfg) {
+                eprintln!("  Privacy:   ⚠️  Could not start privacy filter proxy: {e}");
+                if !pf_cfg.fail_open {
+                    anyhow::bail!(
+                        "Privacy filter is enabled but proxy failed to start and fail_open=false"
+                    );
+                }
+            } else {
+                println!(
+                    "  Privacy:   LLM privacy proxy active on port {}",
+                    pf_cfg.proxy_port
+                );
+            }
+        }
+    }
 
     // Health check: wait a moment and verify the container is still running.
     // If the gateway crashes immediately (e.g. hermes binary not found),
@@ -1926,6 +1975,21 @@ pub(crate) fn cmd_sandbox_spawn(
         }
     }
 
+    // Redirect LLM API traffic through the privacy filter proxy if enabled.
+    {
+        let pf_cfg = config::load().unwrap_or_default().privacy_filter;
+        if pf_cfg.enabled {
+            let proxy_url = privacy_filter::proxy_endpoint(pf_cfg.proxy_port);
+            if std::env::var("ANTHROPIC_BASE_URL").is_err() {
+                env_vars.insert("ANTHROPIC_BASE_URL".to_string(), proxy_url.clone());
+            }
+            if std::env::var("OPENAI_BASE_URL").is_err() {
+                env_vars.insert("OPENAI_BASE_URL".to_string(), proxy_url.clone());
+            }
+            env_vars.insert("BASE_URL".to_string(), proxy_url);
+        }
+    }
+
     let mut extra_volumes = Vec::new();
 
     // Hermes-specific mounts: ~/.hermes/ config dir
@@ -2012,6 +2076,26 @@ pub(crate) fn cmd_sandbox_spawn(
 
     println!("Spawning sandbox for '{}'…", repo_path);
     let info = sandbox.spawn(&task_id, &repo, &config)?;
+
+    // Ensure privacy filter proxy is running if enabled.
+    {
+        let pf_cfg = config::load().unwrap_or_default().privacy_filter;
+        if pf_cfg.enabled {
+            if let Err(e) = privacy_filter::ensure_proxy_running(&pf_cfg) {
+                eprintln!("  Privacy:   ⚠️  Could not start privacy filter proxy: {e}");
+                if !pf_cfg.fail_open {
+                    anyhow::bail!(
+                        "Privacy filter is enabled but proxy failed to start and fail_open=false"
+                    );
+                }
+            } else {
+                println!(
+                    "  Privacy:   LLM privacy proxy active on port {}",
+                    pf_cfg.proxy_port
+                );
+            }
+        }
+    }
 
     let repo_name = repo
         .canonicalize()
@@ -3145,14 +3229,15 @@ fn cmd_sandbox_attach(
 
                 let maybe_host_path = if let Some(path_str) = stored_path {
                     let cp = std::path::PathBuf::from(path_str);
-                    if cp.exists() {
-                        // Convert container path to host path for comparison
-                        let home = dirs::home_dir().unwrap_or_default();
-                        let host_path = if cp.starts_with("/home/node/") {
-                            home.join(cp.strip_prefix("/home/node/").unwrap_or(cp.as_path()))
-                        } else {
-                            cp.clone()
-                        };
+                    // The stored path may be a container path (/home/node/...) or a host path.
+                    // Always convert to host path before calling .exists().
+                    let home = dirs::home_dir().unwrap_or_default();
+                    let host_path = if cp.starts_with("/home/node/") {
+                        home.join(cp.strip_prefix("/home/node/").unwrap_or(cp.as_path()))
+                    } else {
+                        cp.clone()
+                    };
+                    if host_path.exists() {
                         Some((host_path, cp))
                     } else {
                         eprintln!("  Session:   stored pi session gone, re-discovering...");

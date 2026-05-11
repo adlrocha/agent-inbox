@@ -20,6 +20,9 @@ pub struct Config {
     pub pi: PiConfig,
 
     #[serde(default)]
+    pub privacy_filter: PrivacyFilterConfig,
+
+    #[serde(default)]
     pub memory: MemoryConfig,
 }
 
@@ -135,6 +138,79 @@ impl Default for PiConfig {
     fn default() -> Self {
         Self {
             install_on_spawn: default_pi_install_on_spawn(),
+        }
+    }
+}
+
+/// LLM Privacy Filter configuration.
+///
+/// Controls the inline proxy that scans agent API calls for PII/secrets
+/// before they leave the host.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrivacyFilterConfig {
+    /// Whether the privacy filter proxy is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Proxy mode: "redact" replaces PII with [REDACTED: type];
+    /// "block" returns a 400 error when PII is detected;
+    /// "flag" redacts and forwards but adds an alert header.
+    #[serde(default = "default_pf_mode")]
+    pub mode: String,
+
+    /// Port the proxy listens on (host side). Sandboxes reach it via
+    /// 127.0.0.1:<port> because they use --network host.
+    #[serde(default = "default_pf_port")]
+    pub proxy_port: u16,
+
+    /// Inference device for the privacy-filter model.
+    #[serde(default = "default_pf_device")]
+    pub device: String,
+
+    /// Upstream Anthropic API URL (the proxy forwards here after scanning).
+    #[serde(default = "default_pf_anthropic_upstream")]
+    pub anthropic_upstream: String,
+
+    /// Upstream OpenAI API URL (the proxy forwards here after scanning).
+    #[serde(default = "default_pf_openai_upstream")]
+    pub openai_upstream: String,
+
+    /// If the proxy is unreachable, allow the request through (true) or
+    /// block it (false).
+    #[serde(default = "default_true")]
+    pub fail_open: bool,
+}
+
+fn default_pf_mode() -> String {
+    "redact".to_string()
+}
+
+fn default_pf_port() -> u16 {
+    8474
+}
+
+fn default_pf_device() -> String {
+    "cpu".to_string()
+}
+
+fn default_pf_anthropic_upstream() -> String {
+    "https://api.anthropic.com".to_string()
+}
+
+fn default_pf_openai_upstream() -> String {
+    "https://api.openai.com".to_string()
+}
+
+impl Default for PrivacyFilterConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: default_pf_mode(),
+            proxy_port: default_pf_port(),
+            device: default_pf_device(),
+            anthropic_upstream: default_pf_anthropic_upstream(),
+            openai_upstream: default_pf_openai_upstream(),
+            fail_open: true,
         }
     }
 }
@@ -574,5 +650,42 @@ install_on_spawn = false
     fn test_pi_config_absent_defaults() {
         let config: Config = toml::from_str("").unwrap();
         assert!(config.pi.install_on_spawn);
+    }
+
+    // ── PrivacyFilterConfig tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_pf_config_defaults() {
+        let cfg = PrivacyFilterConfig::default();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.mode, "redact");
+        assert_eq!(cfg.proxy_port, 8474);
+        assert_eq!(cfg.device, "cpu");
+        assert_eq!(cfg.anthropic_upstream, "https://api.anthropic.com");
+        assert_eq!(cfg.openai_upstream, "https://api.openai.com");
+        assert!(cfg.fail_open);
+    }
+
+    #[test]
+    fn test_pf_config_parse_overrides() {
+        let toml_str = r#"
+[privacy_filter]
+enabled = true
+mode = "block"
+proxy_port = 9999
+device = "cuda"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(config.privacy_filter.enabled);
+        assert_eq!(config.privacy_filter.mode, "block");
+        assert_eq!(config.privacy_filter.proxy_port, 9999);
+        assert_eq!(config.privacy_filter.device, "cuda");
+    }
+
+    #[test]
+    fn test_pf_config_absent_defaults() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(!config.privacy_filter.enabled);
+        assert_eq!(config.privacy_filter.proxy_port, 8474);
     }
 }

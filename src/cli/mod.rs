@@ -86,6 +86,12 @@ pub enum Commands {
         /// Path to the backup zip file
         path: String,
     },
+
+    /// Manage the LLM privacy filter proxy (scans agent API calls for PII/secrets)
+    Proxy {
+        #[command(subcommand)]
+        action: ProxyAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -548,6 +554,16 @@ pub enum SessionAction {
         #[arg(long)]
         raw: bool,
     },
+}
+
+#[derive(Subcommand)]
+pub enum ProxyAction {
+    /// Start the privacy filter proxy in the background
+    Start,
+    /// Stop the privacy filter proxy
+    Stop,
+    /// Show proxy status and health
+    Status,
 }
 
 #[derive(Subcommand)]

@@ -357,9 +357,59 @@ fn read_session_raw_with_home(id: &str, home: &std::path::Path) -> Result<String
 
 // ── Pi sessions ──────────────────────────────────────────────────────────────
 
+/// Decode a Pi session directory slug back to a filesystem path.
+///
+/// Pi encodes the cwd as a directory slug by replacing `/` with `--` and
+/// wrapping the whole thing in `--..--`.  For example:
+///   `/workspace`                          → `--workspace--`
+///   `/home/adlrocha/workspace/project`    → `--home-adlrocha-workspace-project--`
+///
+/// The encoding is lossy: single hyphens within a path component are
+/// indistinguishable from the `--` path separator once encoded. We therefore
+/// only attempt reconstruction when the slug can be unambiguously matched
+/// against a path that actually exists on disk.  If no existing path matches,
+/// we return `None` rather than returning a plausible-but-wrong string.
+fn decode_pi_slug(slug: &str) -> Option<String> {
+    let inner = slug.strip_prefix("--")?.strip_suffix("--")?;
+    if inner.is_empty() {
+        return None;
+    }
+    // Generate candidate paths by treating every `--` as a `/` separator.
+    // Build the candidate and verify it exists.
+    let candidate = format!("/{}", inner.replace("--", "/"));
+    if std::path::Path::new(&candidate).exists() {
+        return Some(candidate);
+    }
+    // Also try resolving relative to home in case the slug starts with the
+    // home directory (e.g., --home-adlrocha-... on a machine where $HOME=/home/adlrocha).
+    if let Some(home) = dirs::home_dir() {
+        let home_slug_prefix = home
+            .to_string_lossy()
+            .trim_start_matches('/')
+            .replace('/', "-");
+        if inner.starts_with(&home_slug_prefix) {
+            let rest = &inner[home_slug_prefix.len()..];
+            let rest = rest.trim_start_matches('-');
+            let candidate2 = if rest.is_empty() {
+                home.to_string_lossy().into_owned()
+            } else {
+                format!("{}/{}", home.display(), rest.replace("--", "/"))
+            };
+            if std::path::Path::new(&candidate2).exists() {
+                return Some(candidate2);
+            }
+        }
+    }
+    // No match found — return the simple decode as a best-effort display hint.
+    // This may be wrong for paths containing hyphens, but is better than nothing.
+    Some(candidate)
+}
+
 /// Pi session header (first line of JSONL).
 #[derive(Debug, Deserialize)]
 struct PiSessionHeader {
+    #[serde(rename = "type")]
+    record_type: String,
     id: String,
     #[serde(default)]
     cwd: String,
@@ -410,16 +460,30 @@ fn extract_pi_header(path: &PathBuf) -> (String, Option<String>) {
     if let Ok(content) = fs::read_to_string(path) {
         if let Some(first) = content.lines().next() {
             if let Ok(header) = serde_json::from_str::<PiSessionHeader>(first) {
-                return (header.id, Some(header.cwd));
+                if header.record_type == "session" && !header.cwd.is_empty() {
+                    return (header.id, Some(header.cwd));
+                }
             }
         }
     }
-    let fallback = path
+    // Fallback: derive session ID and workspace from the filename / directory name.
+    // Pi filenames are like: 2026-05-08T10-01-45-668Z_<uuid>.jsonl
+    // The parent directory encodes the cwd as a slug: --workspace-- → /workspace,
+    // --home-adlrocha-workspace-personal-nibble-- → /home/adlrocha/workspace/personal/nibble
+    let stem = path
         .file_stem()
         .and_then(|s| s.to_str())
-        .unwrap_or("unknown")
-        .to_string();
-    (fallback, None)
+        .unwrap_or("unknown");
+    // Pi filenames: 2026-05-08T10-01-45-668Z_<uuid>.jsonl — take the part after `_`
+    let session_id = stem.split('_').nth(1).unwrap_or(stem).to_string();
+
+    let workspace = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .and_then(decode_pi_slug);
+
+    (session_id, workspace)
 }
 
 fn format_pi_session(content: &str) -> Result<String> {
@@ -984,6 +1048,62 @@ mod tests {
         let (id, ws) = extract_pi_header(&path);
         assert_eq!(id, "file"); // falls back to filename
         assert_eq!(ws, None);
+    }
+
+    #[test]
+    fn decode_pi_slug_known_paths() {
+        // /workspace exists on this machine
+        assert_eq!(
+            decode_pi_slug("--workspace--"),
+            Some("/workspace".to_string())
+        );
+        // Paths that don't exist fall back to simple decode
+        assert_eq!(
+            decode_pi_slug("--tmp-nonexistent-path--"),
+            Some("/tmp/nonexistent/path".to_string())
+        );
+        // Empty inner → None
+        assert_eq!(decode_pi_slug("----"), None);
+        // No surrounding dashes → None
+        assert_eq!(decode_pi_slug("workspace"), None);
+    }
+
+    #[test]
+    fn extract_pi_header_first_line_is_message() {
+        // Pi session where first line is a message (no session header).
+        // Session ID and workspace must come from filename + directory slug.
+        let temp = tempfile::tempdir().unwrap();
+        // Create a subdirectory with pi-style slug encoding
+        let slug_dir = temp.path().join("--workspace--");
+        std::fs::create_dir_all(&slug_dir).unwrap();
+        let path = write_temp_file(
+            &slug_dir,
+            "2026-05-08T10-01-45-668Z_019e0709-39c4-76fb-9029-d0403f3de449.jsonl",
+            r#"{"type":"message","id":"3e94dafd","parentId":"deef62d4","timestamp":"2026-05-08T10:07:23.192Z","message":{"role":"assistant","content":[]}}"#,
+        );
+        let (id, ws) = extract_pi_header(&path);
+        assert_eq!(id, "019e0709-39c4-76fb-9029-d0403f3de449");
+        assert_eq!(ws, Some("/workspace".to_string()));
+    }
+
+    #[test]
+    fn extract_pi_header_slug_decoding() {
+        let temp = tempfile::tempdir().unwrap();
+        let slug_dir = temp
+            .path()
+            .join("--home-adlrocha-workspace-personal-nibble--");
+        std::fs::create_dir_all(&slug_dir).unwrap();
+        let path = write_temp_file(
+            &slug_dir,
+            "2026-05-08T10-01-45-668Z_019abcde-1234-5678-abcd-ef0123456789.jsonl",
+            r#"{"type":"message","id":"badfeed1"}"#,
+        );
+        let (id, ws) = extract_pi_header(&path);
+        assert_eq!(id, "019abcde-1234-5678-abcd-ef0123456789");
+        assert_eq!(
+            ws,
+            Some("/home/adlrocha/workspace/personal/nibble".to_string())
+        );
     }
 
     // ── Claude cwd extraction ──────────────────────────────────────────────────

@@ -29,6 +29,7 @@ RUN_TELEGRAM=false
 RUN_LISTEN=false
 RUN_LLAMA=false
 RUN_BASELIGHT=false
+RUN_PRIVACY_PROXY=false
 REBUILD_IMAGE=false
 RECOVER_ZIP=""
 
@@ -38,6 +39,7 @@ while [ $# -gt 0 ]; do
         --listen)     RUN_LISTEN=true; shift ;;
         --llama)      RUN_LLAMA=true; shift ;;
         --baselight)  RUN_BASELIGHT=true; shift ;;
+        --privacy-proxy) RUN_PRIVACY_PROXY=true; shift ;;
         --rebuild)    REBUILD_IMAGE=true; shift ;;
         --recover)
             if [ -z "${2:-}" ] || [ "${2#-}" != "$2" ]; then
@@ -55,9 +57,10 @@ echo ""
 echo "  Flags: --telegram   set up Telegram notifications"
 echo "         --listen     set up Telegram reply listener daemon"
 echo "         --llama      set up llama-server systemd service"
-echo "         --baselight  install Baselight MCP server in Claude Code"
-echo "         --rebuild    force rebuild the sandbox container image"
-echo "         --recover    restore from a backup zip after install"
+echo "         --baselight      install Baselight MCP server in Claude Code"
+echo "         --privacy-proxy  install LLM privacy filter proxy service"
+echo "         --rebuild        force rebuild the sandbox container image"
+echo "         --recover        restore from a backup zip after install"
 echo ""
 [ "$REBUILD_IMAGE" = true ] && echo -e "  ${YELLOW}--rebuild${NC}: sandbox image will be rebuilt from scratch"
 if [ -n "$RECOVER_ZIP" ]; then
@@ -224,8 +227,28 @@ step "Installing binaries to $BIN_DIR"
 LISTENER_WAS_ACTIVE=false
 if systemctl --user is-active --quiet nibble-listener.service 2>/dev/null; then
     LISTENER_WAS_ACTIVE=true
-    systemctl --user stop nibble-listener.service
+    # systemctl stop can hang for 90s if the process ignores SIGTERM.
+    # Use timeout (if available) or --no-block + SIGKILL to avoid hanging.
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 5 systemctl --user stop nibble-listener.service 2>/dev/null || true
+    else
+        systemctl --user stop --no-block nibble-listener.service 2>/dev/null || true
+        sleep 2
+        systemctl --user kill --signal=SIGKILL nibble-listener.service 2>/dev/null || true
+    fi
     ok "Stopped nibble-listener.service for upgrade"
+fi
+
+# Also stop the privacy proxy so we can overwrite the binary if it's running.
+if systemctl --user is-active --quiet nibble-privacy-proxy.service 2>/dev/null; then
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 5 systemctl --user stop nibble-privacy-proxy.service 2>/dev/null || true
+    else
+        systemctl --user stop --no-block nibble-privacy-proxy.service 2>/dev/null || true
+        sleep 1
+        systemctl --user kill --signal=SIGKILL nibble-privacy-proxy.service 2>/dev/null || true
+    fi
+    ok "Stopped nibble-privacy-proxy.service for upgrade"
 fi
 
 cp "$REPO_DIR/target/release/nibble" "$BIN_DIR/nibble.new"
@@ -234,9 +257,9 @@ mv -f "$BIN_DIR/nibble.new" "$BIN_DIR/nibble"
 ok "nibble"
 
 
-# Restart the listener if it was running before.
+# Restart services that were running before.
 if [ "$LISTENER_WAS_ACTIVE" = true ]; then
-    systemctl --user start nibble-listener.service
+    systemctl --user start nibble-listener.service 2>/dev/null || warn "Could not restart nibble-listener.service"
     ok "Restarted nibble-listener.service"
 fi
 
@@ -364,9 +387,67 @@ else
     ok "Hermes image will be built on first 'nibble hermes init'"
 fi
 
-# ── 5a. Install systemd auto-resume service ───────────────────────────────────
+# Ensure SYSTEMD_DIR is defined before any service installation sections.
 SYSTEMD_DIR="$HOME/.config/systemd/user"
 mkdir -p "$SYSTEMD_DIR"
+
+# ── 5c. Privacy filter proxy (optional) ──────────────────────────────────────
+step "Installing privacy filter proxy"
+
+mkdir -p "$HOME/.nibble"
+cp "$REPO_DIR/scripts/privacy-proxy.py" "$HOME/.nibble/privacy-proxy.py"
+chmod +x "$HOME/.nibble/privacy-proxy.py"
+ok "privacy-proxy.py → $HOME/.nibble/privacy-proxy.py"
+
+# Check Python + dependencies
+if command -v python3 >/dev/null 2>&1; then
+    ok "python3 found"
+    # Try importing required packages
+    if python3 -c "import fastapi, httpx, uvicorn, transformers" 2>/dev/null; then
+        ok "Python dependencies installed (fastapi, httpx, uvicorn, transformers)"
+    else
+        warn "Missing Python dependencies for privacy proxy."
+        warn "Install with:"
+        warn "  python3 -m pip install --user fastapi httpx uvicorn transformers torch"
+        warn ""
+        warn "Or run with --privacy-proxy to attempt auto-install."
+    fi
+else
+    warn "python3 not found — privacy proxy requires Python 3."
+    warn "Install Python 3 and then run:"
+    warn "  python3 -m pip install --user fastapi httpx uvicorn transformers torch"
+fi
+
+cat > "$SYSTEMD_DIR/nibble-privacy-proxy.service" << UNIT
+[Unit]
+Description=Nibble LLM Privacy Filter Proxy
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.nibble/privacy-proxy.py
+Restart=always
+Environment=HOME=%h
+
+[Install]
+WantedBy=default.target
+UNIT
+
+if systemctl --user daemon-reload 2>/dev/null; then
+    systemctl --user enable nibble-privacy-proxy.service 2>/dev/null || true
+    if [ "$RUN_PRIVACY_PROXY" = true ]; then
+        systemctl --user restart nibble-privacy-proxy.service 2>/dev/null \
+            && ok "Privacy proxy service started" \
+            || warn "Could not start privacy proxy service"
+    else
+        ok "Privacy proxy service installed (enable with --privacy-proxy)"
+    fi
+else
+    warn "systemd user session not available. Privacy proxy won't auto-start."
+    warn "Start manually: python3 $HOME/.nibble/privacy-proxy.py"
+fi
+
+# ── 5a. Install systemd auto-resume service ───────────────────────────────────
 cat > "$SYSTEMD_DIR/nibble-resume.service" << UNIT
 [Unit]
 Description=Nibble — resume sandbox agents after reboot
