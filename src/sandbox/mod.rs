@@ -150,6 +150,37 @@ pub fn get_cache_dir() -> Result<PathBuf> {
     Ok(cache_dir)
 }
 
+/// Compute the container working directory from a host repo path.
+///
+/// The repository is mounted at `/<basename>` inside the container and
+/// that path becomes the working directory. This gives each repo its own
+/// session namespace naturally.
+///
+/// Examples:
+/// - `/home/user/nibble` → `/nibble`
+/// - `/home/user/nibble--feature-x` → `/nibble--feature-x`
+pub fn container_working_dir(repo_path: &std::path::Path) -> String {
+    let basename = repo_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("workspace");
+    format!("/{}", basename)
+}
+
+/// Compute the Pi session directory name for a container working directory.
+///
+/// Pi encodes the cwd as a directory slug by replacing `/` with `--` and
+/// wrapping in `--..--`. For a repo mounted at `/nibble` this yields
+/// `--nibble--`.
+pub fn pi_session_dir_name(container_dir: &str) -> String {
+    let inner = container_dir.trim_start_matches('/');
+    if inner.is_empty() {
+        "--workspace--".to_string()
+    } else {
+        format!("--{}--", inner.replace('/', "--"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

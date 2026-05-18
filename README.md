@@ -115,13 +115,14 @@ alias claude='~/.agent-tasks/wrappers/claude-wrapper'
 ```
 
 What `install.sh` does:
+
 1. Installs Podman if not present (apt / dnf / pacman / brew)
 2. Builds release binaries with `cargo build --release`
 3. Installs `nibble` and `agent-bridge` to `~/.local/bin/`
 4. Copies wrappers to `~/.agent-tasks/wrappers/`
 5. Installs Claude Code hooks to `~/.claude/settings.json`
 6. Installs the Claude Code status line script (see [Status Line](#status-line))
-7. Builds the sandbox image (`nibble-sandbox:latest` — node:20-slim + claude-code)
+7. Builds the sandbox image (`nibble-sandbox:latest`)
 8. Enables `nibble-resume.service` (systemd user service, resumes agents on reboot)
 9. Optionally sets up Telegram and the reply listener daemon
 
@@ -145,6 +146,7 @@ On first run the sandbox image is built (~2-3 min). Subsequent spawns are fast.
 To rebuild the image (e.g. after upgrading nibble): `./install.sh --rebuild`
 
 The container gets:
+
 - Your repo mounted read-write at `/workspace`
 - `ANTHROPIC_API_KEY` and other configured env vars forwarded from host
 - Ports forwarded via host network (services on `:3000`, `:8080`, etc. are reachable from outside)
@@ -183,6 +185,7 @@ When nibble spawns a sandbox and finds `.nibble/setup.sh`, it runs the script in
 The script runs once per container lifetime (at spawn). Because cargo/npm/rustup caches are bind-mounted from the host, subsequent spawns skip downloads and complete in seconds.
 
 If no setup script is found, nibble prints a reminder:
+
 ```
 Setup: ⚠️  No .nibble/setup.sh found — dependencies won't be pre-installed.
        Create .nibble/setup.sh in the repo to auto-install deps on spawn.
@@ -196,6 +199,7 @@ nibble sandbox list
 ```
 
 Output:
+
 ```
 TASK ID              STARTED            STATUS       REPO
 ──────────────────────────────────────────────────────────────────────────────────────
@@ -235,6 +239,7 @@ When a sandbox spawns, nibble writes agent instructions into two files inside th
 | `.claude/CLAUDE.md` | Claude Code entry point — first line is `@../AGENTS.md` which imports the file above |
 
 **How it works:**
+
 - If the file doesn't exist, nibble creates it with just the injected block.
 - If the file exists but has no nibble markers, nibble **appends** the block (your content is untouched).
 - If the file exists and has nibble markers (`<!-- nibble-sandbox:begin -->` / `<!-- nibble-sandbox:end -->`), nibble **replaces** the marked block in-place.
@@ -409,7 +414,7 @@ nibble installs a Claude Code status line that shows live context and quota info
 | Section | Description |
 |---------|-------------|
 | `📁 dir` | Current working directory (tilde-shortened) |
-| ` branch` | Git branch name (yellow) |
+| `branch` | Git branch name (yellow) |
 | `🤖 model` | Active Claude model (magenta) |
 | `ctx ████` | Context window remaining — bar turns orange <50%, red <20% |
 | `5h ████` | 5-hour rate limit remaining, with reset time |
@@ -611,6 +616,7 @@ nibble cron run "Daily Standup"
 ```
 
 Markdown file format (`my-cron.md`):
+
 ```markdown
 # Daily Standup
 

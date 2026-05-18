@@ -17,7 +17,7 @@ use cli::{Cli, Commands, CronAction, HermesAction, ReportAction, SandboxAction};
 use db::Database;
 use models::{AgentType, SandboxConfig, SandboxType, Task, TaskContext, TaskStatus};
 use sandbox::podman::PodmanSandbox;
-use sandbox::{Sandbox, SandboxHealth};
+use sandbox::{container_working_dir, pi_session_dir_name, Sandbox, SandboxHealth};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -1202,39 +1202,32 @@ fn ensure_pi_skills_symlink(home_dir: &std::path::Path) {
     }
 }
 
-/// Delete the most recent pi session file for the current workspace.
+/// Delete the most recent pi session file for a given container working directory.
 ///
-/// Pi stores sessions at `~/.pi/agent/sessions/<workspace-hash>/`.  Since the
-/// hash is computed by pi internally, we use a best-effort approach: find the
-/// newest `.jsonl` file across all session subdirectories sorted by mtime.
-fn delete_latest_pi_session() {
+/// With repo-specific mount points, Pi stores sessions in dedicated directories
+/// (e.g. `--nibble--`). We delete the newest `.jsonl` in that directory.
+fn delete_latest_pi_session(container_dir: &str) {
     let home = match dirs::home_dir() {
         Some(h) => h,
         None => return,
     };
-    let sessions_dir = home.join(".pi").join("agent").join("sessions");
+    let slug = pi_session_dir_name(container_dir);
+    let sessions_dir = home.join(".pi").join("agent").join("sessions").join(&slug);
     if !sessions_dir.exists() {
         return;
     }
 
     let mut newest: Option<(std::path::PathBuf, std::time::SystemTime)> = None;
-    if let Ok(entries) = std::fs::read_dir(&sessions_dir) {
-        for entry in entries.flatten() {
-            if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+    if let Ok(files) = std::fs::read_dir(&sessions_dir) {
+        for file in files.flatten() {
+            let path = file.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
             }
-            if let Ok(files) = std::fs::read_dir(entry.path()) {
-                for file in files.flatten() {
-                    let path = file.path();
-                    if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                        continue;
-                    }
-                    if let Ok(meta) = file.metadata() {
-                        if let Ok(mtime) = meta.modified() {
-                            if newest.as_ref().map_or(true, |(_, t)| mtime > *t) {
-                                newest = Some((path, mtime));
-                            }
-                        }
+            if let Ok(meta) = file.metadata() {
+                if let Ok(mtime) = meta.modified() {
+                    if newest.as_ref().map_or(true, |(_, t)| mtime > *t) {
+                        newest = Some((path, mtime));
                     }
                 }
             }
@@ -1260,15 +1253,16 @@ fn delete_latest_pi_session() {
 /// This is more reliable than `find_pi_session_for_cwd` when multiple Pi sandboxes
 /// are active, because it looks at the session files *inside the container* rather
 /// than scanning the host's ~/.pi which is shared across all sandboxes.
-fn discover_pi_session_in_container(container_id: &str) -> Option<std::path::PathBuf> {
+fn discover_pi_session_in_container(
+    container_id: &str,
+    pi_slug: &str,
+) -> Option<std::path::PathBuf> {
+    let cmd = format!(
+        "ls -t /home/node/.pi/agent/sessions/{}/{{*.jsonl,**/*.jsonl}} 2>/dev/null | head -1",
+        pi_slug
+    );
     let output = std::process::Command::new("podman")
-        .args([
-            "exec",
-            container_id,
-            "sh",
-            "-c",
-            "ls -t /home/node/.pi/agent/sessions/--workspace--/*.jsonl 2>/dev/null | head -1",
-        ])
+        .args(["exec", container_id, "sh", "-c", &cmd])
         .output()
         .ok()?;
     let container_path = String::from_utf8(output.stdout).ok()?.trim().to_string();
@@ -1289,47 +1283,47 @@ fn discover_pi_session_in_container(container_id: &str) -> Option<std::path::Pat
 /// Find the most recent Pi session file whose `cwd` matches the given path.
 ///
 /// Pi session files start with a JSON line like:
-///   {"type":"session","cwd":"/workspace",...}
+///   {"type":"session","cwd":"/nibble",...}
 ///
 /// Returns the absolute path to the matching session file, or None if no match.
-fn find_pi_session_for_cwd(cwd: &str) -> Option<std::path::PathBuf> {
+/// Find the most recent Pi session file for a given container working directory.
+///
+/// With repo-specific mount points (e.g. `/nibble`), Pi stores sessions in a
+/// dedicated directory (`--nibble--`). We look there directly instead of scanning
+/// all sessions and grepping for a `cwd` field.
+///
+/// Falls back to the legacy `--workspace--` directory so old sessions are still
+/// discoverable.
+fn find_pi_session_for_cwd(container_dir: &str) -> Option<std::path::PathBuf> {
     let home = dirs::home_dir()?;
+    let slug = pi_session_dir_name(container_dir);
     let sessions_dir = home.join(".pi").join("agent").join("sessions");
-    if !sessions_dir.exists() {
-        return None;
-    }
 
-    let mut newest: Option<(std::path::PathBuf, std::time::SystemTime)> = None;
-
-    for entry in std::fs::read_dir(&sessions_dir).ok()?.flatten() {
-        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            continue;
+    // Helper: find newest .jsonl in a specific slug directory.
+    let find_newest = |slug_name: &str| -> Option<(std::path::PathBuf, std::time::SystemTime)> {
+        let slug_dir = sessions_dir.join(slug_name);
+        if !slug_dir.exists() {
+            return None;
         }
-        for file in std::fs::read_dir(entry.path()).ok()?.flatten() {
+        let mut newest: Option<(std::path::PathBuf, std::time::SystemTime)> = None;
+        for file in std::fs::read_dir(&slug_dir).ok()?.flatten() {
             let path = file.path();
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
             }
-
-            // Fast check: read first line and look for matching cwd
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                let first_line = content.lines().next().unwrap_or("");
-                if first_line.contains(&format!("\"cwd\":\"{cwd}\""))
-                    || first_line.contains(&format!("\"cwd\": \"{cwd}\""))
-                {
-                    if let Ok(meta) = file.metadata() {
-                        if let Ok(mtime) = meta.modified() {
-                            if newest.as_ref().map_or(true, |(_, t)| mtime > *t) {
-                                newest = Some((path, mtime));
-                            }
-                        }
-                    }
-                }
+            let meta = file.metadata().ok()?;
+            let mtime = meta.modified().ok()?;
+            if newest.as_ref().map_or(true, |(_, t)| mtime > *t) {
+                newest = Some((path, mtime));
             }
         }
-    }
+        newest
+    };
 
-    newest.map(|(path, _)| path)
+    // Try the repo-specific directory first, then fall back to legacy.
+    find_newest(&slug)
+        .or_else(|| find_newest("--workspace--"))
+        .map(|(path, _mtime)| path)
 }
 
 // ── Hermes command handlers ──────────────────────────────────────────────────
@@ -2106,7 +2100,7 @@ pub(crate) fn cmd_sandbox_spawn(
     // Claude/OpenCode-specific post-spawn setup (skip for Hermes)
     // Pi-specific setup: install pi via npm, run setup.sh, inject AGENTS.md
     if !hermes {
-        // Pi install: npm install @mariozechner/pi-coding-agent (non-fatal)
+        // Pi install: npm install @earendil-works/pi-coding-agent (non-fatal)
         if pi {
             let pi_cfg = config::load().unwrap_or_default().pi;
             if pi_cfg.install_on_spawn {
@@ -2118,12 +2112,12 @@ pub(crate) fn cmd_sandbox_spawn(
                         "npm",
                         "install",
                         "-g",
-                        "@mariozechner/pi-coding-agent",
+                        "@earendil-works/pi-coding-agent",
                     ])
                     .status();
                 match status {
                     Ok(s) if s.success() => {
-                        println!("  Tools:     @mariozechner/pi-coding-agent installed")
+                        println!("  Tools:     @earendil-works/pi-coding-agent installed")
                     }
                     Ok(_) => eprintln!(
                         "  Tools:     ⚠️  pi npm install exited non-zero (install manually inside)"
@@ -2178,17 +2172,12 @@ pub(crate) fn cmd_sandbox_spawn(
 
         // Run .nibble/setup.sh if present, otherwise warn the user.
         let setup_script = repo.join(".nibble").join("setup.sh");
+        let container_cwd = container_working_dir(&repo);
         if setup_script.exists() {
             println!("  Setup:     running .nibble/setup.sh …");
+            let setup_path = format!("{}/.nibble/setup.sh", container_cwd);
             let status = std::process::Command::new("podman")
-                .args([
-                    "exec",
-                    "--user",
-                    "node",
-                    &info.id,
-                    "/bin/bash",
-                    "/workspace/.nibble/setup.sh",
-                ])
+                .args(["exec", "--user", "node", &info.id, "/bin/bash", &setup_path])
                 .status()
                 .context("Failed to run .nibble/setup.sh")?;
             if status.success() {
@@ -2209,7 +2198,8 @@ pub(crate) fn cmd_sandbox_spawn(
         // Detect project toolchains and write AGENTS.md + CLAUDE.md into the container.
         let toolchains = detect_toolchains(&repo);
         let agents_md = build_sandbox_agents_md(&repo_name, &toolchains, factory_enabled);
-        match inject_sandbox_claude_md(&info.id, &agents_md) {
+        let container_cwd = container_working_dir(&repo);
+        match inject_sandbox_claude_md(&info.id, &container_cwd, &agents_md) {
             Ok(()) => {
                 if toolchains.is_empty() {
                     println!("  Context:   AGENTS.md + CLAUDE.md updated (no toolchain detected)");
@@ -2353,9 +2343,10 @@ pub(crate) fn cmd_sandbox_spawn(
             let cid = info.id.clone();
             let tid = task_id.clone();
             let db_path = db::default_db_path();
+            let pi_slug = pi_session_dir_name(&container_working_dir(&repo));
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(5));
-                if let Some(host_path) = discover_pi_session_in_container(&cid) {
+                if let Some(host_path) = discover_pi_session_in_container(&cid, &pi_slug) {
                     let home = dirs::home_dir().unwrap_or_default();
                     let cp = if host_path.starts_with(&home) {
                         std::path::PathBuf::from("/home/node")
@@ -3037,6 +3028,13 @@ fn cmd_sandbox_bash(db: &Database, task_id: String) -> Result<()> {
     );
     eprintln!("(Type 'exit' or press Ctrl+D to detach — the container keeps running)");
 
+    let repo_path = task
+        .context
+        .as_ref()
+        .and_then(|c| c.project_path.as_deref())
+        .unwrap_or("");
+    let cwd = container_working_dir(std::path::Path::new(repo_path));
+
     let err =
         std::os::unix::process::CommandExt::exec(std::process::Command::new("podman").args([
             "exec",
@@ -3046,7 +3044,7 @@ fn cmd_sandbox_bash(db: &Database, task_id: String) -> Result<()> {
             "-e",
             "PATH=/home/node/.local/bin:/home/node/.opencode/bin:/usr/local/bin:/usr/bin:/bin",
             "-w",
-            "/workspace",
+            &cwd,
             &container_id,
             "/bin/bash",
         ]));
@@ -3087,6 +3085,15 @@ fn cmd_sandbox_attach(
         sandbox::ContainerStatus::Running => {}
         _ => anyhow::bail!("Container {} is not running", container_id),
     }
+
+    // Derive the container working directory from the repo path.
+    let container_dir = task
+        .context
+        .as_ref()
+        .and_then(|c| c.project_path.as_deref())
+        .map(std::path::Path::new)
+        .map(container_working_dir)
+        .unwrap_or_else(|| "/workspace".to_string());
 
     // If --session was passed, look it up early so we can auto-detect the agent.
     let override_session = session_id.as_ref().and_then(|sid| {
@@ -3188,9 +3195,9 @@ fn cmd_sandbox_attach(
         }
         SelectedAgent::Pi => {
             let pi_install =
-                "command -v pi >/dev/null 2>&1 || sudo npm install -g @mariozechner/pi-coding-agent";
+                "command -v pi >/dev/null 2>&1 || sudo npm install -g @earendil-works/pi-coding-agent";
             if fresh {
-                delete_latest_pi_session();
+                delete_latest_pi_session(&container_dir);
                 format!("{pi_install}; pi")
             } else if btw {
                 format!("{pi_install}; pi")
@@ -3263,15 +3270,16 @@ fn cmd_sandbox_attach(
                 } else {
                     // Try container-specific discovery first, then fall back to global scan
                     let cid = task.container_id.as_deref().unwrap_or("");
+                    let pi_slug = pi_session_dir_name(&container_dir);
                     let discovered = if !cid.is_empty() {
-                        discover_pi_session_in_container(cid)
+                        discover_pi_session_in_container(cid, &pi_slug)
                     } else {
                         None
                     };
                     let host_path = if let Some(host_path) = discovered {
                         Some(host_path)
                     } else {
-                        find_pi_session_for_cwd("/workspace")
+                        find_pi_session_for_cwd(&container_dir)
                     };
                     if let Some(host_path) = host_path {
                         let home = dirs::home_dir().unwrap_or_default();
@@ -3293,7 +3301,7 @@ fn cmd_sandbox_attach(
                         format!("{pi_install}; pi --session '{cp}'", cp = cp.display())
                     } else {
                         eprintln!(
-                            "  Session:   no pi session found for /workspace, starting fresh"
+                            "  Session:   no pi session found for {container_dir}, starting fresh"
                         );
                         format!("{pi_install}; pi")
                     }
@@ -3309,11 +3317,11 @@ fn cmd_sandbox_attach(
             );
             if fresh {
                 eprintln!("  Session:   starting fresh opencode session");
-                format!("cd /workspace && {oc}; {epilogue}")
+                format!("cd {container_dir} && {oc}; {epilogue}")
             } else if let Some(sid) = opencode_session_id {
-                format!("cd /workspace && {oc} --session {sid}; {epilogue}")
+                format!("cd {container_dir} && {oc} --session {sid}; {epilogue}")
             } else {
-                format!("cd /workspace && {oc}; {epilogue}")
+                format!("cd {container_dir} && {oc}; {epilogue}")
             }
         }
         SelectedAgent::Claude => {
@@ -3333,13 +3341,13 @@ fn cmd_sandbox_attach(
 
             if btw {
                 let throwaway_id = uuid::Uuid::new_v4();
-                format!("cd /workspace && {claude} --session-id {throwaway_id}")
+                format!("cd {container_dir} && {claude} --session-id {throwaway_id}")
             } else if let Some(sid) = claude_session_id {
                 format!(
-                    "cd /workspace && {claude} --resume {sid} 2>&1 || {claude} --session-id {sid}"
+                    "cd {container_dir} && {claude} --resume {sid} 2>&1 || {claude} --session-id {sid}"
                 )
             } else {
-                format!("cd /workspace && {claude}")
+                format!("cd {container_dir} && {claude}")
             }
         }
     };
@@ -3377,7 +3385,7 @@ fn cmd_sandbox_attach(
 
     podman_args.extend([
         "-w".into(),
-        "/workspace".into(),
+        container_dir.clone().into(),
         container_id.clone(),
         "/bin/bash".into(),
         "-c".into(),
@@ -3973,7 +3981,7 @@ fn detect_toolchains(
     results
 }
 
-/// Build the AGENTS.md content written to `/workspace/AGENTS.md` inside the
+/// Build the AGENTS.md content written to `/<repo-name>/AGENTS.md` inside the
 /// container.  This is the **primary** agent instruction file — OpenCode reads
 /// it natively and Claude Code reads it via the `@../AGENTS.md` import in CLAUDE.md.
 ///
@@ -4046,7 +4054,7 @@ fn build_sandbox_agents_md(
 /// Write nibble's sandbox instructions into `AGENTS.md` and `.claude/CLAUDE.md`
 /// inside the container, **without clobbering any existing repo content**.
 ///
-/// **AGENTS.md** (`/workspace/AGENTS.md`):
+/// **AGENTS.md** (`/<repo-name>/AGENTS.md`):
 /// - Nibble's content is wrapped in sentinel comments so it can be updated
 ///   idempotently without touching the rest of the file:
 ///   ```
@@ -4060,19 +4068,23 @@ fn build_sandbox_agents_md(
 /// - If the file exists but has no sentinel → the block is appended at the end;
 ///   existing repo content is left completely untouched.
 ///
-/// **CLAUDE.md** (`/workspace/.claude/CLAUDE.md`):
+/// **CLAUDE.md** (`/<repo-name>/.claude/CLAUDE.md`):
 /// - Contains `@../AGENTS.md` as the first line (safe-prepend, never overwrites).
 /// - If the file already exists with `@../AGENTS.md` at line 1, it is left untouched.
 /// - If `@../AGENTS.md` is missing from line 1, it is prepended — user content below is preserved.
-fn inject_sandbox_claude_md(container_id: &str, agents_content: &str) -> Result<()> {
+fn inject_sandbox_claude_md(
+    container_id: &str,
+    container_dir: &str,
+    agents_content: &str,
+) -> Result<()> {
     let escaped_agents = agents_content.replace('\'', "'\\''");
 
     let script = format!(
         r#"set -e
-mkdir -p /workspace/.claude
+mkdir -p {dir}/.claude
 
 # ── Update AGENTS.md using sentinel block (never overwrites repo content) ──────
-AGENTS_FILE=/workspace/AGENTS.md
+AGENTS_FILE={dir}/AGENTS.md
 BEGIN_SENTINEL='<!-- nibble-sandbox:begin -->'
 END_SENTINEL='<!-- nibble-sandbox:end -->'
 NIBBLE_BLOCK=$(printf '%s\n%s\n%s\n' "$BEGIN_SENTINEL" '{agents}' "$END_SENTINEL")
@@ -4099,7 +4111,7 @@ else
 fi
 
 # ── Update .claude/CLAUDE.md (Claude Code entrypoint) ─────────────────────────
-TARGET=/workspace/.claude/CLAUDE.md
+TARGET={dir}/.claude/CLAUDE.md
 IMPORT_LINE='@../AGENTS.md'
 
 if [ ! -f "$TARGET" ]; then
@@ -4116,6 +4128,7 @@ else
     fi
 fi"#,
         agents = escaped_agents,
+        dir = container_dir,
     );
 
     let output = std::process::Command::new("podman")

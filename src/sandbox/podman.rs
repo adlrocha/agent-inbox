@@ -7,7 +7,9 @@
 //! - Privileged mode so the agent can install system packages inside the container
 //! - Volume mounts for the repo and shared dependency caches
 
-use crate::sandbox::{ContainerInfo, ContainerStatus, Sandbox, SandboxConfig};
+use crate::sandbox::{
+    container_working_dir, ContainerInfo, ContainerStatus, Sandbox, SandboxConfig,
+};
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 use std::process::Command;
@@ -91,10 +93,10 @@ impl PodmanSandbox {
 
     /// Standard Dockerfile for Claude Code + OpenCode sandboxes.
     fn generate_standard_dockerfile(&self) -> String {
-        r#"FROM node:20-slim
+        r#"FROM node:22-slim
 
 # Install system dependencies.
-# node:20-slim already has a 'node' user (uid 1000) — we reuse it.
+# node:22-slim already has a 'node' user (uid 1000) — we reuse it.
 RUN apt-get update && apt-get install -y \
     git \
     curl \
@@ -135,10 +137,10 @@ CMD ["bash"]
     /// Dockerfile for Hermes Agent sandboxes.
     /// INV-6: Separate image from standard nibble-sandbox to avoid bloating it with Python.
     fn generate_hermes_dockerfile(&self) -> String {
-        r#"FROM node:20-slim
+        r#"FROM node:22-slim
 
 # Install system dependencies.
-# node:20-slim already has a 'node' user (uid 1000) — we reuse it.
+# node:22-slim already has a 'node' user (uid 1000) — we reuse it.
 RUN apt-get update && apt-get install -y \
     git \
     curl \
@@ -347,7 +349,7 @@ impl Sandbox for PodmanSandbox {
             "--network".to_string(),
             "host".to_string(),
             "-w".to_string(),
-            "/workspace".to_string(),
+            container_working_dir(&repo_abs),
             // Map host uid/gid into the container so volume-mounted files
             // owned by the host user (e.g. ~/.claude) are accessible as node.
             "--userns=keep-id".to_string(),
@@ -408,9 +410,11 @@ impl Sandbox for PodmanSandbox {
             }
         }
 
+        let cwd = container_working_dir(&repo_abs);
+
         // Repo mount
         args.push("-v".to_string());
-        args.push(format!("{}:/workspace:rw", repo_abs.display()));
+        args.push(format!("{}:{}:rw", repo_abs.display(), cwd));
 
         // Shared dependency caches
         for (host_path, container_path) in self.get_cache_volumes()? {
@@ -445,8 +449,9 @@ impl Sandbox for PodmanSandbox {
             eprintln!("[sandbox] Shadowing repo .claude/settings.json to prevent hook duplication");
             args.push("-v".to_string());
             args.push(format!(
-                "{}:/workspace/.claude/settings.json:ro",
-                empty_settings_path.display()
+                "{}:{}/.claude/settings.json:ro",
+                empty_settings_path.display(),
+                cwd
             ));
         }
 

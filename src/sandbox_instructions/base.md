@@ -1,6 +1,6 @@
 ## Environment
 
-- **Working directory**: `/workspace` (the project repo, mounted read-write)
+- **Working directory**: `/<repo-name>` (the project repo, mounted read-write)
 - **Full sudo access**: install any system package with `apt-get install`
 - **Ports forwarded** to the host: services on `localhost:3000`, `:8080`, etc. are reachable from outside
 - **Internet access** is available

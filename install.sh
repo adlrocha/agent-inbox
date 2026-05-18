@@ -366,7 +366,7 @@ else
 fi
 
 # ── 5. Sandbox image ─────────────────────────────────────────────────────────
-step "Building sandbox image (node:20-slim + claude-code + opencode)"
+step "Building sandbox image"
 
 SANDBOX_BUILD_ARGS=""
 [ "$REBUILD_IMAGE" = true ] && SANDBOX_BUILD_ARGS="--rebuild"

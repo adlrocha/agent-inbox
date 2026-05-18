@@ -357,52 +357,23 @@ fn read_session_raw_with_home(id: &str, home: &std::path::Path) -> Result<String
 
 // ── Pi sessions ──────────────────────────────────────────────────────────────
 
-/// Decode a Pi session directory slug back to a filesystem path.
+/// Decode a Pi session directory slug back to a container path.
 ///
 /// Pi encodes the cwd as a directory slug by replacing `/` with `--` and
 /// wrapping the whole thing in `--..--`.  For example:
-///   `/workspace`                          → `--workspace--`
-///   `/home/adlrocha/workspace/project`    → `--home-adlrocha-workspace-project--`
+///   `/nibble`              → `--nibble--`
+///   `/nibble--feature-x`   → `--nibble--feature-x--`
 ///
-/// The encoding is lossy: single hyphens within a path component are
-/// indistinguishable from the `--` path separator once encoded. We therefore
-/// only attempt reconstruction when the slug can be unambiguously matched
-/// against a path that actually exists on disk.  If no existing path matches,
-/// we return `None` rather than returning a plausible-but-wrong string.
+/// Since each repo is mounted at `/<basename>` inside the container, the
+/// decoded path is deterministic and does not need existence checks on the
+/// host (the path is a container path, not a host path).
 fn decode_pi_slug(slug: &str) -> Option<String> {
     let inner = slug.strip_prefix("--")?.strip_suffix("--")?;
     if inner.is_empty() {
         return None;
     }
-    // Generate candidate paths by treating every `--` as a `/` separator.
-    // Build the candidate and verify it exists.
-    let candidate = format!("/{}", inner.replace("--", "/"));
-    if std::path::Path::new(&candidate).exists() {
-        return Some(candidate);
-    }
-    // Also try resolving relative to home in case the slug starts with the
-    // home directory (e.g., --home-adlrocha-... on a machine where $HOME=/home/adlrocha).
-    if let Some(home) = dirs::home_dir() {
-        let home_slug_prefix = home
-            .to_string_lossy()
-            .trim_start_matches('/')
-            .replace('/', "-");
-        if inner.starts_with(&home_slug_prefix) {
-            let rest = &inner[home_slug_prefix.len()..];
-            let rest = rest.trim_start_matches('-');
-            let candidate2 = if rest.is_empty() {
-                home.to_string_lossy().into_owned()
-            } else {
-                format!("{}/{}", home.display(), rest.replace("--", "/"))
-            };
-            if std::path::Path::new(&candidate2).exists() {
-                return Some(candidate2);
-            }
-        }
-    }
-    // No match found — return the simple decode as a best-effort display hint.
-    // This may be wrong for paths containing hyphens, but is better than nothing.
-    Some(candidate)
+    // Simple decode: replace `--` with `/` and prepend `/`.
+    Some(format!("/{}", inner.replace("--", "/")))
 }
 
 /// Pi session header (first line of JSONL).

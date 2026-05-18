@@ -7,7 +7,7 @@
 //! they reach the target process.
 //!
 //! **Strategy**: run `claude --continue` via `podman exec -i` with the message on
-//! stdin.  `--continue` resumes the most recent conversation in /workspace without
+//! stdin.  `--continue` resumes the most recent conversation in the repo cwd without
 //! needing a session UUID.  Claude enters its interactive loop, receives the message
 //! on stdin, processes the turn, fires Stop hooks, then exits when stdin closes (EOF).
 
@@ -15,7 +15,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::models::{SandboxType, Task};
 use crate::sandbox::podman::PodmanSandbox;
-use crate::sandbox::{ContainerStatus, Sandbox};
+use crate::sandbox::{container_working_dir, ContainerStatus, Sandbox};
 
 /// Send `message` to the Claude session running inside a Podman sandbox.
 ///
@@ -53,14 +53,20 @@ pub fn inject_returning_child(task: &Task, message: &str) -> Result<std::process
     // derived from the repo path and may not correspond to any actual session file
     // inside the container, so we must NOT pass it to --resume (that causes a hard
     // failure).  When no confirmed session ID exists we fall back to --continue,
-    // which resumes the most recent conversation in /workspace — identical to the
-    // pre-refactor behaviour.
+    // which resumes the most recent conversation in the repo cwd.
     let session_id = task
         .context
         .as_ref()
         .and_then(|c| c.claude_session_id.as_deref())
         .filter(|id| !id.starts_with("ses_")); // guard: ses_ IDs are opencode, not claude
-    spawn_inject(container_id, session_id, &task.task_id, message)
+    let cwd = task
+        .context
+        .as_ref()
+        .and_then(|c| c.project_path.as_deref())
+        .map(std::path::Path::new)
+        .map(container_working_dir)
+        .unwrap_or_else(|| "/workspace".to_string());
+    spawn_inject(container_id, session_id, &task.task_id, &cwd, message)
 }
 
 /// Check if the container is healthy enough to accept an inject.
@@ -102,6 +108,7 @@ fn spawn_inject(
     container_id: &str,
     session_id: Option<&str>,
     task_id: &str,
+    cwd: &str,
     message: &str,
 ) -> Result<std::process::Child> {
     let claude = "/home/node/.local/bin/claude";
@@ -112,7 +119,7 @@ fn spawn_inject(
 
     // Use --resume <session_id> when we have one so we target the exact
     // conversation for this task.  Fall back to --continue (most recent
-    // conversation in /workspace) only when no session_id is recorded yet.
+    // conversation in the repo cwd) only when no session_id is recorded yet.
     let resume_args: Vec<&str> = match session_id {
         Some(sid) => {
             eprintln!("[inject] task={task_id} using --resume {sid}");
@@ -137,7 +144,7 @@ fn spawn_inject(
             "-e",
             agent_task_id_env.as_str(),
             "-w",
-            "/workspace",
+            &cwd,
             container_id,
             claude,
         ])

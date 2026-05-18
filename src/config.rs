@@ -125,7 +125,7 @@ pub fn resolve_repo_mounts(
 /// Controls how the Pi coding agent is installed inside a nibble sandbox.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PiConfig {
-    /// If true, npm install @mariozechner/pi-coding-agent on every spawn.
+    /// If true, npm install @earendil-works/pi-coding-agent on every spawn.
     #[serde(default = "default_pi_install_on_spawn")]
     pub install_on_spawn: bool,
 }

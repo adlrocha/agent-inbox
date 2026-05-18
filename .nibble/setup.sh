@@ -31,14 +31,13 @@ if ! command -v rustup &>/dev/null; then
 fi
 
 # Ensure the toolchain matches rust-toolchain.toml if present
-if [ -f /workspace/rust-toolchain.toml ]; then
+if [ -f rust-toolchain.toml ]; then
     echo "[setup] Syncing toolchain from rust-toolchain.toml..."
     rustup show active-toolchain || true
 fi
 
 # ── Build the project ─────────────────────────────────────────────────────────
 echo "[setup] Building project (cargo build)..."
-cd /workspace
 cargo build
 
 echo "[setup] Done. Rust toolchain and project binary are ready."

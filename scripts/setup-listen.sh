@@ -78,11 +78,12 @@ systemctl --user enable  "$SERVICE_NAME.service"
 ok "Enabled $SERVICE_NAME (starts on login)"
 
 # Start now if not already running
+# Use --no-block to avoid hanging if the service crashes and restarts in a loop.
 if systemctl --user is-active --quiet "$SERVICE_NAME.service"; then
     warn "$SERVICE_NAME is already running — restarting to pick up changes"
-    systemctl --user restart "$SERVICE_NAME.service"
+    systemctl --user restart --no-block "$SERVICE_NAME.service"
 else
-    systemctl --user start "$SERVICE_NAME.service"
+    systemctl --user start --no-block "$SERVICE_NAME.service"
 fi
 ok "Started $SERVICE_NAME"
 

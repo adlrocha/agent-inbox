@@ -1,6 +1,7 @@
 # Agent Inbox Sandboxing Implementation Plan
 
 ## Overview
+
 Add rootless Podman sandboxing to agent-inbox for secure, autonomous Claude Code execution with Telegram-based monitoring and control.
 
 ## Architecture
@@ -137,6 +138,7 @@ src/
 ## Implementation Phases
 
 ### Phase 1: Core Sandbox Module
+
 **Files:** `src/sandbox/mod.rs`, `src/sandbox/podman.rs`, `src/sandbox/input_forwarder.sh`
 
 1. Create `Sandbox` trait with methods:
@@ -148,7 +150,7 @@ src/
 
 2. Implement `PodmanSandbox`:
    - Check podman availability, install if missing
-   - Build/pull base image (`node:20-slim` + claude-code)
+   - Build/pull base image
    - Create container with proper mounts, network, env
    - Start input-forwarder alongside claude-code
 
@@ -159,9 +161,11 @@ src/
    - Handles special commands (e.g., "\x03" for Ctrl+C)
 
 ### Phase 2: Database & Models
+
 **Files:** `src/models/task.rs`, `src/db/mod.rs`
 
 1. Update `Task` struct:
+
    ```rust
    pub struct Task {
        // ... existing fields ...
@@ -182,9 +186,11 @@ src/
    - `update_container_state()`
 
 ### Phase 3: CLI Commands
+
 **Files:** `src/cli/mod.rs`, `src/main.rs`, `wrappers/claude-wrapper`
 
 1. Add CLI commands:
+
    ```rust
    Spawn {
        repo_path: PathBuf,
@@ -207,6 +213,7 @@ src/
 3. Update wrapper script to support `--sandbox` flag
 
 ### Phase 4: Telegram Integration
+
 **Files:** `src/notifications/telegram_listener.rs`, `src/agent_input.rs`
 
 1. Update `agent_input.rs`:
@@ -218,6 +225,7 @@ src/
    - No major changes needed - uses existing `agent_input::inject()`
 
 ### Phase 5: Auto-Resume
+
 **Files:** `src/main.rs`, `scripts/agent-inbox.service`
 
 1. Add `Resume` command logic:
@@ -231,6 +239,7 @@ src/
    - Starts telegram listener
 
 ### Phase 6: Install Script & Hardening
+
 **Files:** `install.sh`, `scripts/setup-podman.sh`
 
 1. Update `install.sh`:
@@ -293,6 +302,7 @@ For now, only normal text is implemented. Control sequences can be added later.
 ## Rollback Plan
 
 If sandboxing fails:
+
 1. `sandbox_type = 'none'` allows traditional mode
 2. Database migration is reversible
 3. Existing PTY injection still works for non-sandboxed tasks

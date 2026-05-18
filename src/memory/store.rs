@@ -14,6 +14,12 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+// ── YAML frontmatter helpers ─────────────────────────────────────────────────
+
+fn default_confidence() -> f32 {
+    1.0
+}
+
 // ── YAML frontmatter wrappers ────────────────────────────────────────────────
 
 /// Frontmatter for memory files.
@@ -31,10 +37,13 @@ struct MemoryFrontmatter {
     project: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     title: Option<String>,
+    #[serde(default)]
     tags: Vec<String>,
+    #[serde(default = "default_confidence")]
     confidence: f32,
     created_at: String,
     updated_at: String,
+    #[serde(default)]
     access_count: u32,
 }
 
@@ -47,9 +56,11 @@ struct LessonFrontmatter {
     status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     project: Option<String>,
+    #[serde(default)]
     tags: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     source_session: Option<String>,
+    #[serde(default)]
     occurrence_count: u32,
     created_at: String,
     updated_at: String,
@@ -236,7 +247,8 @@ pub fn list_memories(
         let mem = match parse_memory_entry(&path) {
             Ok(m) => m,
             Err(e) => {
-                eprintln!("[memory] Skipping invalid file {}: {e:#}", path.display());
+                // Silently skip files with malformed frontmatter
+                let _ = e;
                 continue;
             }
         };
@@ -458,7 +470,8 @@ pub fn list_lessons(
         let lesson = match parse_lesson_entry(&path) {
             Ok(l) => l,
             Err(e) => {
-                eprintln!("[memory] Skipping invalid lesson {}: {e:#}", path.display());
+                // Silently skip files with malformed frontmatter
+                let _ = e;
                 continue;
             }
         };
