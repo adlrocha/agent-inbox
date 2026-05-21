@@ -105,7 +105,6 @@ fn main() -> Result<()> {
                     project_path: Some(cwd),
                     session_id,
                     claude_session_id: None,
-                    opencode_session_id: None,
                     extra,
                 });
                 db.insert_task(&task)?;
@@ -123,27 +122,18 @@ fn main() -> Result<()> {
                     project_path: None,
                     session_id: None,
                     claude_session_id: None,
-                    opencode_session_id: None,
                     extra: HashMap::new(),
                 });
                 // Route to the agent-specific field.
-                // For tasks explicitly registered as OpenCode, always write opencode_session_id.
-                // For ClaudeCode tasks (which includes all sandbox tasks regardless of which
-                // agent attaches), use the ses_ ID-format heuristic because both Claude and
-                // opencode can attach to the same sandbox — the ID format is the only reliable
-                // distinguisher at hook / epilogue time.
-                // Unknown agent types also fall back to the heuristic.
+                // All sandbox tasks write claude_session_id when the ID is a UUID.
+                // ses_ prefix (legacy) is ignored.
                 match task.agent_type {
-                    AgentType::OpenCode => {
-                        ctx.opencode_session_id = Some(session_id);
-                    }
                     AgentType::ClaudeCode
                     | AgentType::Hermes
                     | AgentType::Pi
                     | AgentType::Unknown(_) => {
-                        // Use ses_ prefix as tiebreaker (opencode IDs, UUID = Claude)
                         if session_id.starts_with("ses_") {
-                            ctx.opencode_session_id = Some(session_id);
+                            // Legacy session ID (ses_ prefix) — ignore
                         } else {
                             ctx.claude_session_id = Some(session_id);
                         }
@@ -409,11 +399,9 @@ fn main() -> Result<()> {
                 // Build lookup maps from session identifiers → project_path
                 let tasks = db.list_tasks().unwrap_or_default();
                 let mut claude_task_repo: HashMap<String, String> = HashMap::new();
-                let mut opencode_task_repo: HashMap<String, String> = HashMap::new();
                 let mut pi_task_repo: HashMap<String, String> = HashMap::new();
                 // Reverse maps: agent session_id → task_id (for memory badge linkage)
                 let mut claude_session_to_task: HashMap<String, String> = HashMap::new();
-                let mut opencode_session_to_task: HashMap<String, String> = HashMap::new();
                 let mut pi_path_to_task: HashMap<String, String> = HashMap::new();
                 let home_dir = dirs::home_dir();
                 for task in &tasks {
@@ -422,10 +410,6 @@ fn main() -> Result<()> {
                             if let Some(ref sid) = ctx.claude_session_id {
                                 claude_task_repo.insert(sid.clone(), path.clone());
                                 claude_session_to_task.insert(sid.clone(), task.task_id.clone());
-                            }
-                            if let Some(ref sid) = ctx.opencode_session_id {
-                                opencode_task_repo.insert(sid.clone(), path.clone());
-                                opencode_session_to_task.insert(sid.clone(), task.task_id.clone());
                             }
                             if let Some(serde_json::Value::String(ref p)) =
                                 ctx.extra.get("pi_session_path")
@@ -458,7 +442,6 @@ fn main() -> Result<()> {
                         group.sessions.retain(|s| {
                             let resolved_repo = match s.agent.as_str() {
                                 "claude" => claude_task_repo.get(&s.session_id).cloned(),
-                                "opencode" => opencode_task_repo.get(&s.session_id).cloned(),
                                 "pi" => pi_task_repo
                                     .get(&s.path.to_string_lossy().to_string())
                                     .cloned(),
@@ -494,7 +477,6 @@ fn main() -> Result<()> {
                         // Resolve workspace: prefer task project_path for sandbox sessions
                         let resolved_ws = match s.agent.as_str() {
                             "claude" => claude_task_repo.get(&s.session_id).cloned(),
-                            "opencode" => opencode_task_repo.get(&s.session_id).cloned(),
                             "pi" => pi_task_repo
                                 .get(&s.path.to_string_lossy().to_string())
                                 .cloned(),
@@ -508,7 +490,6 @@ fn main() -> Result<()> {
                         // Resolve task_id for memory badge lookup
                         let task_id_for_mem = match s.agent.as_str() {
                             "claude" => claude_session_to_task.get(&s.session_id).cloned(),
-                            "opencode" => opencode_session_to_task.get(&s.session_id).cloned(),
                             "pi" => pi_path_to_task
                                 .get(&s.path.to_string_lossy().to_string())
                                 .cloned(),
@@ -655,7 +636,6 @@ fn main() -> Result<()> {
                     fresh,
                     session_id,
                     false,
-                    false,
                     factory_enabled,
                     hermes,
                     pi,
@@ -672,7 +652,6 @@ fn main() -> Result<()> {
                 container_or_path,
                 fresh,
                 btw,
-                opencode,
                 hermes,
                 pi,
                 session,
@@ -690,16 +669,7 @@ fn main() -> Result<()> {
 
                 match resolve_sandbox_id(&db, &effective_path) {
                     Ok(task_id) => {
-                        cmd_sandbox_attach(
-                            &db,
-                            task_id,
-                            fresh,
-                            btw,
-                            opencode,
-                            hermes,
-                            pi,
-                            session.clone(),
-                        )?;
+                        cmd_sandbox_attach(&db, task_id, fresh, btw, hermes, pi, session.clone())?;
                     }
                     Err(e) => {
                         let looks_like_path = effective_path.starts_with('.')
@@ -719,7 +689,6 @@ fn main() -> Result<()> {
                                 fresh,
                                 None,
                                 true,
-                                opencode,
                                 cfg.factory.enabled,
                                 hermes,
                                 pi,
@@ -729,7 +698,6 @@ fn main() -> Result<()> {
                                 task_id,
                                 fresh,
                                 btw,
-                                opencode,
                                 hermes,
                                 pi,
                                 session.clone(),
@@ -1570,7 +1538,6 @@ fn cmd_hermes_spawn_internal(db: &Database) -> Result<String> {
         project_path: None,
         session_id: None,
         claude_session_id: None,
-        opencode_session_id: None,
         extra: HashMap::new(),
     });
     db.insert_task(&task)?;
@@ -1849,7 +1816,6 @@ pub(crate) fn cmd_sandbox_spawn(
     fresh: bool,
     session_id: Option<String>,
     no_attach: bool,
-    opencode: bool,
     factory_enabled: bool,
     hermes: bool,
     pi: bool,
@@ -1893,7 +1859,6 @@ pub(crate) fn cmd_sandbox_spawn(
                             existing_task_id.clone(),
                             fresh,
                             false,
-                            opencode,
                             hermes,
                             pi,
                             None,
@@ -1929,7 +1894,6 @@ pub(crate) fn cmd_sandbox_spawn(
                                     tid.clone(),
                                     fresh,
                                     false,
-                                    opencode,
                                     hermes,
                                     pi,
                                     None,
@@ -2097,7 +2061,7 @@ pub(crate) fn cmd_sandbox_spawn(
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
         .unwrap_or_else(|| repo_path.clone());
 
-    // Claude/OpenCode-specific post-spawn setup (skip for Hermes)
+    // Post-spawn setup (skip for Hermes)
     // Pi-specific setup: install pi via npm, run setup.sh, inject AGENTS.md
     if !hermes {
         // Pi install: npm install @earendil-works/pi-coding-agent (non-fatal)
@@ -2143,30 +2107,6 @@ pub(crate) fn cmd_sandbox_spawn(
         if let Ok(out) = restore_result {
             if String::from_utf8_lossy(&out.stdout).contains("restored") {
                 println!("  Auth:      restored .claude.json from backup");
-            }
-        }
-
-        // Upgrade opencode to the latest version on every spawn so sandboxes don't
-        // drift behind the image-baked version.
-        {
-            let status = std::process::Command::new("podman")
-                .args([
-                    "exec",
-                    "-u",
-                    "node",
-                    &info.id,
-                    "/home/node/.opencode/bin/opencode",
-                    "upgrade",
-                ])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
-            match status {
-                Ok(s) if s.success() => println!("  Tools:     opencode upgraded to latest"),
-                Ok(_) => eprintln!(
-                    "  Tools:     ⚠️  opencode upgrade exited non-zero (baked version still usable)"
-                ),
-                Err(e) => eprintln!("  Tools:     ⚠️  opencode upgrade failed to run: {e}"),
             }
         }
 
@@ -2258,7 +2198,6 @@ pub(crate) fn cmd_sandbox_spawn(
         project_path: Some(abs_repo_path.clone()),
         session_id: Some(resolved_session_id),
         claude_session_id: None,
-        opencode_session_id: None,
         extra: HashMap::new(),
     });
     db.insert_task(&task)?;
@@ -2373,8 +2312,6 @@ pub(crate) fn cmd_sandbox_spawn(
             "Hermes"
         } else if pi {
             "Pi"
-        } else if opencode {
-            "opencode"
         } else {
             "Claude"
         };
@@ -2387,16 +2324,7 @@ pub(crate) fn cmd_sandbox_spawn(
             short_id, abs_repo_path
         );
         println!();
-        cmd_sandbox_attach(
-            db,
-            task_id.clone(),
-            fresh,
-            false,
-            opencode,
-            hermes,
-            pi,
-            None,
-        )?;
+        cmd_sandbox_attach(db, task_id.clone(), fresh, false, hermes, pi, None)?;
     }
 
     Ok(task_id)
@@ -2917,7 +2845,6 @@ fn resolve_cron_id(db: &Database, id_or_label: &str) -> Result<i64> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum SelectedAgent {
     Claude,
-    OpenCode,
     Pi,
     Hermes,
 }
@@ -2926,7 +2853,6 @@ impl std::fmt::Display for SelectedAgent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SelectedAgent::Claude => write!(f, "Claude Code"),
-            SelectedAgent::OpenCode => write!(f, "opencode"),
             SelectedAgent::Pi => write!(f, "pi"),
             SelectedAgent::Hermes => write!(f, "hermes"),
         }
@@ -2937,23 +2863,19 @@ impl std::fmt::Display for SelectedAgent {
 ///
 /// Rules:
 /// - Plain sandboxes (non-hermes) default to Claude; hermes sandboxes default to hermes.
-/// - Any agent can be explicitly selected with `--opencode`, `--pi`, or `--hermes`.
+/// - Any agent can be explicitly selected with `--pi` or `--hermes`.
 /// - `--hermes` is only valid on hermes sandboxes (different image/binary).
 /// - Claude-only option (`--btw`) is rejected for other agents.
 /// - At most one agent flag can be specified per invocation.
 fn resolve_attach_agent(
     stored_type: &AgentType,
-    opencode: bool,
     hermes: bool,
     pi: bool,
     btw: bool,
 ) -> Result<SelectedAgent> {
-    let explicit_count = [opencode, hermes, pi].iter().filter(|&&f| f).count();
+    let explicit_count = [hermes, pi].iter().filter(|&&f| f).count();
     if explicit_count > 1 {
         let mut flags = Vec::new();
-        if opencode {
-            flags.push("--opencode");
-        }
         if hermes {
             flags.push("--hermes");
         }
@@ -2977,13 +2899,6 @@ fn resolve_attach_agent(
             anyhow::bail!("--pi is not supported on hermes sandboxes (pi is not installed)");
         }
         SelectedAgent::Pi
-    } else if opencode {
-        if is_hermes_sandbox {
-            anyhow::bail!(
-                "--opencode is not supported on hermes sandboxes (opencode is not installed)"
-            );
-        }
-        SelectedAgent::OpenCode
     } else if is_hermes_sandbox {
         SelectedAgent::Hermes
     } else {
@@ -3042,7 +2957,7 @@ fn cmd_sandbox_bash(db: &Database, task_id: String) -> Result<()> {
             "-e",
             "TERM=xterm-256color",
             "-e",
-            "PATH=/home/node/.local/bin:/home/node/.opencode/bin:/usr/local/bin:/usr/bin:/bin",
+            "PATH=/home/node/.local/bin:/usr/local/bin:/usr/bin:/bin",
             "-w",
             &cwd,
             &container_id,
@@ -3062,7 +2977,6 @@ fn cmd_sandbox_attach(
     task_id: String,
     fresh: bool,
     btw: bool,
-    opencode: bool,
     hermes: bool,
     pi: bool,
     session_id: Option<String>,
@@ -3106,10 +3020,10 @@ fn cmd_sandbox_attach(
     // Auto-derive agent flags from the requested session when the user didn't
     // explicitly specify an agent. If they did specify one but it conflicts,
     // warn and let the session's agent win.
-    let (opencode, hermes, pi, agent_override) = if let Some(ref sesh) = override_session {
-        let (oc, h, pi_flag, overridden) =
-            crate::session::derive_agent_flags_from_session(opencode, hermes, pi, sesh);
-        if [opencode, hermes, pi].iter().filter(|&&f| f).count() > 0 {
+    let (hermes, pi, agent_override) = if let Some(ref sesh) = override_session {
+        let (h, pi_flag, overridden) =
+            crate::session::derive_agent_flags_from_session(hermes, pi, sesh);
+        if [hermes, pi].iter().filter(|&&f| f).count() > 0 {
             eprintln!(
                 "  Session:   {} session {} — overriding explicit agent flag",
                 sesh.agent,
@@ -3122,12 +3036,12 @@ fn cmd_sandbox_attach(
                 &sesh.session_id[..sesh.session_id.len().min(8)]
             );
         }
-        (oc, h, pi_flag, overridden)
+        (h, pi_flag, overridden)
     } else {
-        (opencode, hermes, pi, false)
+        (hermes, pi, false)
     };
 
-    let agent = resolve_attach_agent(&task.agent_type, opencode, hermes, pi, btw)?;
+    let agent = resolve_attach_agent(&task.agent_type, hermes, pi, btw)?;
 
     // Resolve the per-agent session IDs stored for this task.
     // Each agent writes its own field so they never clobber each other.
@@ -3149,39 +3063,16 @@ fn cmd_sandbox_attach(
     } else {
         task.context.as_ref().and_then(|c| {
             let raw = c.claude_session_id.as_deref().or_else(|| {
-                // Legacy fallback: use generic session_id only for non-opencode tasks.
+                // Legacy fallback: use generic session_id for non-hermes tasks.
                 match task.agent_type {
-                    AgentType::OpenCode => None,
+                    AgentType::Hermes => None,
                     _ => c.session_id.as_deref(),
                 }
             });
-            // Guard: a ses_... value is an opencode session ID that was mistakenly stored
+            // Guard: a ses_... value is a legacy session ID that was mistakenly stored
             // in claude_session_id by an older version of the session-id handler. Treat it
             // as absent so Claude never tries `--resume ses_...`.
             raw.filter(|id| !id.starts_with("ses_"))
-        })
-    };
-    let opencode_session_id: Option<&str> = if let Some(ref sesh) = override_session {
-        if sesh.agent == "opencode" {
-            Some(&sesh.session_id)
-        } else if agent_override {
-            None
-        } else {
-            eprintln!(
-                "  Warning:   requested session is for {}, not opencode",
-                sesh.agent
-            );
-            None
-        }
-    } else {
-        task.context.as_ref().and_then(|c| {
-            c.opencode_session_id.as_deref().or_else(|| {
-                // Legacy fallback: use generic session_id only for opencode tasks.
-                match task.agent_type {
-                    AgentType::OpenCode => c.session_id.as_deref(),
-                    _ => None,
-                }
-            })
         })
     };
 
@@ -3309,21 +3200,6 @@ fn cmd_sandbox_attach(
                 pi_cmd
             }
         }
-        SelectedAgent::OpenCode => {
-            let oc = "/home/node/.opencode/bin/opencode";
-            let nibble = "/home/node/.local/bin/nibble";
-            let epilogue = format!(
-                r#"SID=$({oc} session list --format json -n 1 2>/dev/null | jq -r '.[0].id // empty' 2>/dev/null); [ -n "$SID" ] && [ -n "$AGENT_TASK_ID" ] && {nibble} report session-id "$AGENT_TASK_ID" "$SID" 2>/dev/null; true"#
-            );
-            if fresh {
-                eprintln!("  Session:   starting fresh opencode session");
-                format!("cd {container_dir} && {oc}; {epilogue}")
-            } else if let Some(sid) = opencode_session_id {
-                format!("cd {container_dir} && {oc} --session {sid}; {epilogue}")
-            } else {
-                format!("cd {container_dir} && {oc}; {epilogue}")
-            }
-        }
         SelectedAgent::Claude => {
             let claude = "/home/node/.local/bin/claude --dangerously-skip-permissions";
 
@@ -3370,19 +3246,6 @@ fn cmd_sandbox_attach(
         podman_args.extend(["-e".into(), format!("AGENT_TASK_ID={}", task_id)]);
     }
 
-    // opencode yolo mode: auto-approve all tool calls (equivalent to Claude Code's
-    // --dangerously-skip-permissions). Set via OPENCODE_PERMISSION env var rather
-    // than a CLI flag — opencode merges this JSON into its permission config.
-    // TODO: opencode added --dangerously-skip-permissions in ~April 2026. Once that
-    // version is available via the installer, replace the env var with that flag in
-    // the shell_cmd above and remove this block.
-    if agent == SelectedAgent::OpenCode {
-        podman_args.extend([
-            "-e".into(),
-            r#"OPENCODE_PERMISSION={"bash":"allow","edit":"allow","read":"allow","grep":"allow","question":"allow","external_directory":"allow","todowrite":"allow","codesearch":"allow"}"#.into(),
-        ]);
-    }
-
     podman_args.extend([
         "-w".into(),
         container_dir.clone().into(),
@@ -3414,13 +3277,6 @@ fn cmd_sandbox_attach(
                 );
                 eprintln!("(Exit pi or press Ctrl+C to detach — the container keeps running)");
             }
-        }
-        SelectedAgent::OpenCode => {
-            eprintln!(
-                "Attaching to sandbox {} ({}) [opencode]…",
-                task.title, container_id
-            );
-            eprintln!("(Exit opencode or press Ctrl+C to detach — the container keeps running)");
         }
         SelectedAgent::Claude => {
             if btw {
@@ -3982,7 +3838,7 @@ fn detect_toolchains(
 }
 
 /// Build the AGENTS.md content written to `/<repo-name>/AGENTS.md` inside the
-/// container.  This is the **primary** agent instruction file — OpenCode reads
+/// container.  This is the **primary** agent instruction file — Claude reads
 /// it natively and Claude Code reads it via the `@../AGENTS.md` import in CLAUDE.md.
 ///
 /// The content covers sandbox environment, toolchain setup, and (when factory is
@@ -4228,7 +4084,6 @@ fn format_header(task: &Task, attention: bool) -> String {
 fn agent_display(agent_type: &AgentType) -> (&'static str, String) {
     match agent_type {
         AgentType::ClaudeCode => ("🤖", "Claude Code".to_string()),
-        AgentType::OpenCode => ("⚡", "OpenCode".to_string()),
         AgentType::Hermes => ("🧠", "Hermes".to_string()),
         AgentType::Pi => ("🥧", "Pi".to_string()),
         AgentType::Unknown(s) => ("🔧", s.clone()),
@@ -4312,13 +4167,12 @@ mod notification_tests {
     fn test_format_location_fallback_to_path() {
         use crate::models::TaskContext;
         use std::collections::HashMap;
-        let mut task = make_task("opencode", "opencode (interactive)");
+        let mut task = make_task("pi", "pi (interactive)");
         task.context = Some(TaskContext {
             url: None,
             project_path: Some("/home/user/projects/my-app".to_string()),
             session_id: None,
             claude_session_id: None,
-            opencode_session_id: None,
             extra: HashMap::new(),
         });
         let loc = format_location(&task);
@@ -4332,8 +4186,8 @@ mod notification_tests {
             ("🤖", "Claude Code".to_string())
         );
         assert_eq!(
-            agent_display(&AgentType::OpenCode),
-            ("⚡", "OpenCode".to_string())
+            agent_display(&AgentType::Hermes),
+            ("🧠", "Hermes".to_string())
         );
     }
 
@@ -4365,7 +4219,7 @@ mod notification_tests {
 
     #[test]
     fn test_header_exited_task_shows_warning() {
-        let mut task = make_task("opencode", "[proj:main]");
+        let mut task = make_task("pi", "[proj:main]");
         task.status = TaskStatus::Exited;
         task.exit_code = Some(1);
         let header = format_header(&task, false);
@@ -4618,578 +4472,28 @@ mod notification_tests {
     }
 
     /// AC-5 / INV-3: report session-id for a claude_code task writes claude_session_id,
-    /// leaves opencode_session_id untouched.
     #[test]
-    fn test_ac5_report_session_id_routes_to_claude_field() {
+    fn test_ac5_report_session_id_routes_to_claude_field_replacement() {
         use crate::models::TaskContext;
         use std::collections::HashMap;
 
         let (_tmp, db, mut task) = make_db_with_task("claude_code");
-        // Simulate what the handler does — routing by ID prefix
         let sid = "550e8400-e29b-41d4-a716-446655440000".to_string();
         let ctx = task.context.get_or_insert_with(|| TaskContext {
             url: None,
             project_path: None,
             session_id: None,
             claude_session_id: None,
-            opencode_session_id: None,
             extra: HashMap::new(),
         });
-        if sid.starts_with("ses_") {
-            ctx.opencode_session_id = Some(sid.clone());
-        } else {
-            ctx.claude_session_id = Some(sid.clone());
-        }
+        ctx.claude_session_id = Some(sid.clone());
         db.update_task(&task).unwrap();
 
         let reloaded = db.get_task_by_id(&task.task_id).unwrap().unwrap();
         let ctx = reloaded.context.as_ref().unwrap();
         assert_eq!(
             ctx.claude_session_id.as_deref(),
-            Some("550e8400-e29b-41d4-a716-446655440000"),
-            "AC-5: UUID session ID must be stored in claude_session_id"
-        );
-        assert!(
-            ctx.opencode_session_id.is_none(),
-            "AC-5: opencode_session_id must be untouched for a UUID session ID"
-        );
-    }
-
-    /// AC-6 / INV-3: report session-id with a ses_... ID writes opencode_session_id,
-    /// leaves claude_session_id untouched — regardless of task agent_type.
-    #[test]
-    fn test_ac6_report_session_id_routes_to_opencode_field() {
-        use crate::models::TaskContext;
-        use std::collections::HashMap;
-
-        // Note: agent_type is "claude_code" (all sandbox tasks are), but the ses_ prefix
-        // on the ID is what determines the routing.
-        let (_tmp, db, mut task) = make_db_with_task("claude_code");
-        let sid = "ses_abcdef1234567890".to_string();
-        let ctx = task.context.get_or_insert_with(|| TaskContext {
-            url: None,
-            project_path: None,
-            session_id: None,
-            claude_session_id: None,
-            opencode_session_id: None,
-            extra: HashMap::new(),
-        });
-        if sid.starts_with("ses_") {
-            ctx.opencode_session_id = Some(sid.clone());
-        } else {
-            ctx.claude_session_id = Some(sid.clone());
-        }
-        db.update_task(&task).unwrap();
-
-        let reloaded = db.get_task_by_id(&task.task_id).unwrap().unwrap();
-        let ctx = reloaded.context.as_ref().unwrap();
-        assert_eq!(
-            ctx.opencode_session_id.as_deref(),
-            Some("ses_abcdef1234567890"),
-            "AC-6: ses_... session ID must be stored in opencode_session_id"
-        );
-        assert!(
-            ctx.claude_session_id.is_none(),
-            "AC-6: claude_session_id must be untouched for a ses_... session ID"
-        );
-    }
-
-    /// AC-7 / INV-4: Legacy rows (only session_id, no typed fields) — Claude task
-    /// reads back the legacy value via the fallback path; opencode does NOT.
-    #[test]
-    fn test_ac7_inv4_legacy_session_id_fallback_claude() {
-        use crate::models::TaskContext;
-        use std::collections::HashMap;
-
-        let (_tmp, db, mut task) = make_db_with_task("claude_code");
-        // Write legacy row: only session_id, no typed fields
-        task.context = Some(TaskContext {
-            url: None,
-            project_path: None,
-            session_id: Some("legacy-uuid-claude".to_string()),
-            claude_session_id: None,
-            opencode_session_id: None,
-            extra: HashMap::new(),
-        });
-        db.update_task(&task).unwrap();
-
-        let reloaded = db.get_task_by_id(&task.task_id).unwrap().unwrap();
-
-        // Replicate the attach resolution logic for Claude
-        let claude_sid: Option<&str> = reloaded.context.as_ref().and_then(|c| {
-            c.claude_session_id
-                .as_deref()
-                .or(if reloaded.agent_type != AgentType::OpenCode {
-                    c.session_id.as_deref()
-                } else {
-                    None
-                })
-        });
-        assert_eq!(
-            claude_sid,
-            Some("legacy-uuid-claude"),
-            "AC-7/INV-4: claude attach must fall back to legacy session_id for claude_code tasks"
-        );
-
-        // Replicate the attach resolution logic for opencode — must NOT use the legacy value
-        let oc_sid: Option<&str> = reloaded.context.as_ref().and_then(|c| {
-            c.opencode_session_id
-                .as_deref()
-                .or(if reloaded.agent_type == AgentType::OpenCode {
-                    c.session_id.as_deref()
-                } else {
-                    None
-                })
-        });
-        assert!(
-            oc_sid.is_none(),
-            "AC-7/INV-4: opencode attach must NOT use legacy session_id from a claude_code task"
-        );
-    }
-
-    /// INV-1 / INV-2: cross-agent isolation — opencode session ID stored on an opencode
-    /// task must not be visible when the attach logic runs for Claude, and vice versa.
-    #[test]
-    fn test_inv1_inv2_cross_agent_session_isolation() {
-        use crate::models::TaskContext;
-        use std::collections::HashMap;
-
-        // Task that has both IDs set (simulates a sandbox used by both agents)
-        let (_tmp, db, mut task) = make_db_with_task("claude_code");
-        task.context = Some(TaskContext {
-            url: None,
-            project_path: None,
-            session_id: None,
-            claude_session_id: Some("uuid-for-claude".to_string()),
-            opencode_session_id: Some("ses_for_opencode".to_string()),
-            extra: HashMap::new(),
-        });
-        db.update_task(&task).unwrap();
-
-        let reloaded = db.get_task_by_id(&task.task_id).unwrap().unwrap();
-
-        // Claude attach reads only claude_session_id
-        let claude_sid: Option<&str> = reloaded.context.as_ref().and_then(|c| {
-            c.claude_session_id
-                .as_deref()
-                .or(if reloaded.agent_type != AgentType::OpenCode {
-                    c.session_id.as_deref()
-                } else {
-                    None
-                })
-        });
-        assert_eq!(
-            claude_sid,
-            Some("uuid-for-claude"),
-            "INV-1: Claude attach must use claude_session_id"
-        );
-        assert_ne!(
-            claude_sid,
-            Some("ses_for_opencode"),
-            "INV-1: Claude attach must NOT use opencode_session_id"
-        );
-
-        // opencode attach reads only opencode_session_id
-        let oc_sid: Option<&str> = reloaded.context.as_ref().and_then(|c| {
-            c.opencode_session_id
-                .as_deref()
-                .or(if reloaded.agent_type == AgentType::OpenCode {
-                    c.session_id.as_deref()
-                } else {
-                    None
-                })
-        });
-        assert_eq!(
-            oc_sid,
-            Some("ses_for_opencode"),
-            "INV-2: opencode attach must use opencode_session_id"
-        );
-        assert_ne!(
-            oc_sid,
-            Some("uuid-for-claude"),
-            "INV-2: opencode attach must NOT use claude_session_id"
-        );
-    }
-
-    /// AC-1 / INV-1: after only an opencode session is stored, Claude attach
-    /// resolves to None (starts fresh, not with the opencode ses_... ID).
-    #[test]
-    fn test_ac1_claude_attach_ignores_opencode_session() {
-        use crate::models::TaskContext;
-        use std::collections::HashMap;
-
-        let (_tmp, db, mut task) = make_db_with_task("claude_code");
-        // Only opencode session stored (the bug scenario)
-        task.context = Some(TaskContext {
-            url: None,
-            project_path: None,
-            session_id: None,
-            claude_session_id: None,
-            opencode_session_id: Some("ses_opencode_only".to_string()),
-            extra: HashMap::new(),
-        });
-        db.update_task(&task).unwrap();
-
-        let reloaded = db.get_task_by_id(&task.task_id).unwrap().unwrap();
-        let claude_sid: Option<&str> = reloaded.context.as_ref().and_then(|c| {
-            c.claude_session_id
-                .as_deref()
-                .or(if reloaded.agent_type != AgentType::OpenCode {
-                    c.session_id.as_deref()
-                } else {
-                    None
-                })
-        });
-        assert!(
-            claude_sid.is_none(),
-            "AC-1: Claude attach must be None (start fresh) when only opencode session is stored"
-        );
-    }
-
-    /// AC-2 / INV-2: after only a Claude session is stored, opencode attach
-    /// resolves to None (starts fresh, not with the Claude UUID).
-    #[test]
-    fn test_ac2_opencode_attach_ignores_claude_session() {
-        use crate::models::TaskContext;
-        use std::collections::HashMap;
-
-        let (_tmp, db, mut task) = make_db_with_task("opencode");
-        // Only Claude session stored
-        task.context = Some(TaskContext {
-            url: None,
-            project_path: None,
-            session_id: None,
-            claude_session_id: Some("uuid-claude-only".to_string()),
-            opencode_session_id: None,
-            extra: HashMap::new(),
-        });
-        db.update_task(&task).unwrap();
-
-        let reloaded = db.get_task_by_id(&task.task_id).unwrap().unwrap();
-        let oc_sid: Option<&str> = reloaded.context.as_ref().and_then(|c| {
-            c.opencode_session_id
-                .as_deref()
-                .or(if reloaded.agent_type == AgentType::OpenCode {
-                    c.session_id.as_deref()
-                } else {
-                    None
-                })
-        });
-        assert!(
-            oc_sid.is_none(),
-            "AC-2: opencode attach must be None (start fresh) when only Claude session is stored"
-        );
-    }
-
-    /// ADVERSARIAL AC-8: ReportAction::SessionId for an OpenCode task with a UUID session ID
-    /// (non-ses_ format) must still write opencode_session_id — the AgentType::OpenCode match
-    /// arm always routes to opencode, not the ses_ heuristic.
-    ///
-    /// This test catches a mutation where the AgentType::OpenCode direct arm is removed
-    /// and the ses_ heuristic alone is relied upon — that would misroute a UUID from an
-    /// explicitly-registered opencode task to claude_session_id.
-    #[test]
-    fn test_adversarial_ac8_opencode_task_uuid_routes_to_opencode_field() {
-        use crate::models::TaskContext;
-        use std::collections::HashMap;
-
-        let (_tmp, db, mut task) = make_db_with_task("opencode");
-        // Simulate the handler: AgentType::OpenCode always writes opencode_session_id
-        // regardless of ID format (UUID, not ses_...).
-        let sid = "550e8400-e29b-41d4-a716-446655440000".to_string();
-        let ctx = task.context.get_or_insert_with(|| TaskContext {
-            url: None,
-            project_path: None,
-            session_id: None,
-            claude_session_id: None,
-            opencode_session_id: None,
-            extra: HashMap::new(),
-        });
-        // Replicate the actual handler logic (match task.agent_type)
-        match task.agent_type {
-            AgentType::OpenCode => {
-                ctx.opencode_session_id = Some(sid.clone());
-            }
-            AgentType::ClaudeCode | AgentType::Hermes | AgentType::Pi | AgentType::Unknown(_) => {
-                if sid.starts_with("ses_") {
-                    ctx.opencode_session_id = Some(sid.clone());
-                } else {
-                    ctx.claude_session_id = Some(sid.clone());
-                }
-            }
-        }
-        db.update_task(&task).unwrap();
-
-        let reloaded = db.get_task_by_id(&task.task_id).unwrap().unwrap();
-        let ctx = reloaded.context.as_ref().unwrap();
-        assert_eq!(ctx.opencode_session_id.as_deref(), Some("550e8400-e29b-41d4-a716-446655440000"),
-            "AC-8: UUID session ID for an OpenCode task must write opencode_session_id (not claude_session_id)");
-        assert!(
-            ctx.claude_session_id.is_none(),
-            "AC-8: claude_session_id must be untouched for an OpenCode task"
-        );
-    }
-
-    // ── resolve_attach_agent tests ────────────────────────────────────────────
-    // Verifies the agent selection model:
-    //   Plain sandboxes → claude (default), opencode, pi
-    //   Hermes sandboxes → hermes (default), claude, opencode, pi
-    //   --hermes only valid on hermes sandboxes
-    //   --btw only valid with claude and pi
-
-    fn resolve(
-        stored: &AgentType,
-        opencode: bool,
-        hermes: bool,
-        pi: bool,
-    ) -> Result<SelectedAgent> {
-        resolve_attach_agent(stored, opencode, hermes, pi, false)
-    }
-
-    fn resolve_opts(
-        stored: &AgentType,
-        opencode: bool,
-        hermes: bool,
-        pi: bool,
-        btw: bool,
-    ) -> Result<SelectedAgent> {
-        resolve_attach_agent(stored, opencode, hermes, pi, btw)
-    }
-
-    // ── Default agent (no flags) ──────────────────────────────────────────────
-
-    #[test]
-    fn test_plain_claude_sandbox_default_is_claude() {
-        assert_eq!(
-            resolve(&AgentType::ClaudeCode, false, false, false).unwrap(),
-            SelectedAgent::Claude
-        );
-    }
-
-    #[test]
-    fn test_plain_opencode_sandbox_default_is_claude() {
-        assert_eq!(
-            resolve(&AgentType::OpenCode, false, false, false).unwrap(),
-            SelectedAgent::Claude
-        );
-    }
-
-    #[test]
-    fn test_plain_pi_sandbox_default_is_claude() {
-        assert_eq!(
-            resolve(&AgentType::Pi, false, false, false).unwrap(),
-            SelectedAgent::Claude
-        );
-    }
-
-    #[test]
-    fn test_unknown_sandbox_default_is_claude() {
-        assert_eq!(
-            resolve(
-                &AgentType::Unknown("future_agent".into()),
-                false,
-                false,
-                false
-            )
-            .unwrap(),
-            SelectedAgent::Claude
-        );
-    }
-
-    // ── Explicit agent flags on plain sandboxes ───────────────────────────────
-
-    #[test]
-    fn test_plain_opencode_flag() {
-        assert_eq!(
-            resolve(&AgentType::ClaudeCode, true, false, false).unwrap(),
-            SelectedAgent::OpenCode
-        );
-    }
-
-    #[test]
-    fn test_plain_pi_flag() {
-        assert_eq!(
-            resolve(&AgentType::ClaudeCode, false, false, true).unwrap(),
-            SelectedAgent::Pi
-        );
-    }
-
-    #[test]
-    fn test_plain_hermes_flag_rejected() {
-        let err = resolve(&AgentType::ClaudeCode, false, true, false).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("--hermes can only be used with hermes sandboxes"));
-    }
-
-    #[test]
-    fn test_pi_sandbox_opencode_flag_switches() {
-        assert_eq!(
-            resolve(&AgentType::Pi, true, false, false).unwrap(),
-            SelectedAgent::OpenCode
-        );
-    }
-
-    #[test]
-    fn test_opencode_sandbox_pi_flag_switches() {
-        assert_eq!(
-            resolve(&AgentType::OpenCode, false, false, true).unwrap(),
-            SelectedAgent::Pi
-        );
-    }
-
-    // ── Explicit agent flags on hermes sandboxes ──────────────────────────────
-
-    #[test]
-    fn test_hermes_sandbox_opencode_flag_rejected() {
-        let err = resolve(&AgentType::Hermes, true, false, false).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("--opencode is not supported on hermes sandboxes"));
-    }
-
-    #[test]
-    fn test_hermes_sandbox_pi_flag_rejected() {
-        let err = resolve(&AgentType::Hermes, false, false, true).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("--pi is not supported on hermes sandboxes"));
-    }
-
-    #[test]
-    fn test_hermes_sandbox_hermes_flag() {
-        assert_eq!(
-            resolve(&AgentType::Hermes, false, true, false).unwrap(),
-            SelectedAgent::Hermes
-        );
-    }
-
-    #[test]
-    fn test_hermes_sandbox_default_is_hermes() {
-        assert_eq!(
-            resolve(&AgentType::Hermes, false, false, false).unwrap(),
-            SelectedAgent::Hermes
-        );
-    }
-
-    // ── Mutual exclusivity ────────────────────────────────────────────────────
-
-    #[test]
-    fn test_opencode_and_pi_exclusive() {
-        let err = resolve(&AgentType::ClaudeCode, true, false, true).unwrap_err();
-        assert!(err.to_string().contains("mutually exclusive"));
-        assert!(err.to_string().contains("--opencode"));
-        assert!(err.to_string().contains("--pi"));
-    }
-
-    #[test]
-    fn test_opencode_and_hermes_exclusive() {
-        let err = resolve(&AgentType::Hermes, true, true, false).unwrap_err();
-        assert!(err.to_string().contains("mutually exclusive"));
-    }
-
-    #[test]
-    fn test_pi_and_hermes_exclusive() {
-        let err = resolve(&AgentType::Hermes, false, true, true).unwrap_err();
-        assert!(err.to_string().contains("mutually exclusive"));
-    }
-
-    #[test]
-    fn test_all_three_flags_exclusive() {
-        let err = resolve(&AgentType::Hermes, true, true, true).unwrap_err();
-        assert!(err.to_string().contains("mutually exclusive"));
-    }
-
-    // ── Claude-only options (btw) ──────────────────────────────────────────────
-
-    #[test]
-    fn test_btw_with_claude_ok() {
-        assert_eq!(
-            resolve_opts(&AgentType::ClaudeCode, false, false, false, true).unwrap(),
-            SelectedAgent::Claude
-        );
-    }
-
-    #[test]
-    fn test_btw_with_opencode_rejected() {
-        let err = resolve_opts(&AgentType::ClaudeCode, true, false, false, true).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("--btw is not supported with opencode"));
-    }
-
-    #[test]
-    fn test_btw_with_pi_ok() {
-        assert_eq!(
-            resolve_opts(&AgentType::ClaudeCode, false, false, true, true).unwrap(),
-            SelectedAgent::Pi
-        );
-    }
-
-    #[test]
-    fn test_btw_with_pi_on_pi_sandbox_ok() {
-        assert_eq!(
-            resolve_opts(&AgentType::Pi, false, false, true, true).unwrap(),
-            SelectedAgent::Pi
-        );
-    }
-
-    #[test]
-    fn test_btw_with_hermes_default_rejected() {
-        let err = resolve_opts(&AgentType::Hermes, false, false, false, true).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("--btw is not supported with hermes"));
-    }
-
-    #[test]
-    fn test_btw_with_hermes_explicit_rejected() {
-        let err = resolve_opts(&AgentType::Hermes, false, true, false, true).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("--btw is not supported with hermes"));
-    }
-
-    // ── Hermes sandbox restrictions ───────────────────────────────────────────
-
-    #[test]
-    fn test_hermes_sandbox_only_supports_hermes() {
-        // Default
-        assert_eq!(
-            resolve(&AgentType::Hermes, false, false, false).unwrap(),
-            SelectedAgent::Hermes
-        );
-        // Explicit hermes
-        assert_eq!(
-            resolve(&AgentType::Hermes, false, true, false).unwrap(),
-            SelectedAgent::Hermes
-        );
-    }
-
-    // ── Agent switching on plain sandbox ──────────────────────────────────────
-
-    #[test]
-    fn test_pi_sandbox_switch_to_opencode_no_conflict() {
-        // This was the original bug: auto-detected pi conflicted with --opencode
-        assert_eq!(
-            resolve(&AgentType::Pi, true, false, false).unwrap(),
-            SelectedAgent::OpenCode
-        );
-    }
-
-    #[test]
-    fn test_pi_sandbox_switch_to_claude_no_conflict() {
-        assert_eq!(
-            resolve(&AgentType::Pi, false, false, false).unwrap(),
-            SelectedAgent::Claude
-        );
-    }
-
-    #[test]
-    fn test_opencode_sandbox_switch_to_pi_no_conflict() {
-        assert_eq!(
-            resolve(&AgentType::OpenCode, false, false, true).unwrap(),
-            SelectedAgent::Pi
+            Some("550e8400-e29b-41d4-a716-446655440000")
         );
     }
 }

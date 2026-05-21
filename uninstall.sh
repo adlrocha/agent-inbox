@@ -126,14 +126,7 @@ for skill_dir in "$CLAUDE_SKILLS_DIR"/factory-*/; do
     ok "Removed $(basename "$skill_dir")"
 done
 
-# ── 8. Remove global AGENTS.md for OpenCode ──────────────────────────────────
-OPENCODE_AGENTS="$HOME/.config/opencode/AGENTS.md"
-if [ -f "$OPENCODE_AGENTS" ]; then
-    rm -f "$OPENCODE_AGENTS"
-    ok "Removed $OPENCODE_AGENTS"
-fi
-
-# ── 9. Remove Claude Code hooks ──────────────────────────────────────────────
+# ── 8. Remove Claude Code hooks ──────────────────────────────────────────────
 step "Removing Claude Code hooks"
 
 if [ -f "$CLAUDE_SETTINGS" ] && command -v jq >/dev/null 2>&1; then

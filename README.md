@@ -22,7 +22,7 @@ This section lists every feature area in the project. Use it to audit what's wor
 | 8 | **`--btw` sessions** | dx | `attach --btw` — throwaway session that doesn't affect main session history (ad-hoc research, parallel work) |
 | 9 | **Session GC** | dx | `nibble sandbox gc` — deletes old `.jsonl` history files from `~/.claude/projects/` to free disk |
 | 10 | **Hermes Agent** | experimental | Singleton sandbox where you mount/unmount repos dynamically; `hermes gateway` as PID 1 |
-| 11 | **Alternative LLM backends** | experimental | `--kimi`, `--glm`, `--opencode` flags on attach — use non-Claude agents inside the same sandbox |
+| 11 | **Alternative LLM backends** | experimental | `--kimi`, `--glm` flags on attach — use non-Claude agents inside the same sandbox |
 | 12 | **Telegram notifications** | notifications | Sends last-message/attention alert to phone when agent finishes or needs input |
 | 13 | **Telegram reply listener** | notifications | Long-poll daemon (`nibble listen`) — routes phone replies back to agents via `podman exec -i` |
 | 14 | **Telegram bot commands** | notifications | `/help`, `/sandboxes`, `/spawn`, `/cron list` — control nibble from phone |
@@ -118,7 +118,7 @@ What `install.sh` does:
 
 1. Installs Podman if not present (apt / dnf / pacman / brew)
 2. Builds release binaries with `cargo build --release`
-3. Installs `nibble` and `agent-bridge` to `~/.local/bin/`
+3. Installs `nibble` to `~/.local/bin/`
 4. Copies wrappers to `~/.agent-tasks/wrappers/`
 5. Installs Claude Code hooks to `~/.claude/settings.json`
 6. Installs the Claude Code status line script (see [Status Line](#status-line))

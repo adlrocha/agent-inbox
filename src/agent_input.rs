@@ -58,7 +58,7 @@ pub fn inject_returning_child(task: &Task, message: &str) -> Result<std::process
         .context
         .as_ref()
         .and_then(|c| c.claude_session_id.as_deref())
-        .filter(|id| !id.starts_with("ses_")); // guard: ses_ IDs are opencode, not claude
+        .filter(|id| !id.starts_with("ses_")); // guard: ses_ IDs are legacy, not claude
     let cwd = task
         .context
         .as_ref()
@@ -187,7 +187,6 @@ mod tests {
             project_path: None,
             session_id: None,
             claude_session_id: None,
-            opencode_session_id: None,
             extra: HashMap::new(),
         });
         t

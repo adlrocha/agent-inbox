@@ -1045,20 +1045,20 @@ mod tests {
         assert_eq!(retrieved.status, TaskStatus::Completed);
     }
 
-    /// AC-5: DB round-trip for AgentType::OpenCode
+    /// AC-5: DB round-trip for AgentType::Pi
     #[test]
-    fn test_ac5_agent_type_opencode_db_round_trip() {
+    fn test_ac5_agent_type_pi_db_round_trip() {
         let (db, _temp) = create_test_db();
         let task = Task::new(
-            "oc-123".to_string(),
-            AgentType::OpenCode,
-            "opencode task".to_string(),
+            "pi-123".to_string(),
+            AgentType::Pi,
+            "pi task".to_string(),
             None,
             None,
         );
         db.insert_task(&task).unwrap();
-        let retrieved = db.get_task_by_id("oc-123").unwrap().unwrap();
-        assert_eq!(retrieved.agent_type, AgentType::OpenCode);
+        let retrieved = db.get_task_by_id("pi-123").unwrap().unwrap();
+        assert_eq!(retrieved.agent_type, AgentType::Pi);
     }
 
     /// AC-6: DB round-trip for AgentType::Unknown — lossless

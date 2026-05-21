@@ -277,29 +277,53 @@ chmod +x "$WRAPPERS_DIR/claude-wrapper"
 ok "claude-wrapper"
 
 # ── 4a. Install AI Factory skills ─────────────────────────────────────────────
-# Skills are installed to ~/.claude/skills/<name>/SKILL.md — this path is
-# discovered automatically by both Claude Code and OpenCode (compat mode).
+# Skills are installed to both ~/.claude/skills/ (Claude Code) and
+# ~/.nibble/skills/ (Pi harness). Existing files are overwritten so
+# updates always propagate.
+install_skill() {
+    local src_dir="$1"
+    local dest_dir="$2"
+    local skill_name
+    skill_name="$(basename "$src_dir")"
+    local dest="$dest_dir/$skill_name"
+    mkdir -p "$dest"
+    cp -f "$src_dir/SKILL.md" "$dest/SKILL.md"
+    ok "skill: $skill_name → $dest/"
+}
+
 CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
-mkdir -p "$CLAUDE_SKILLS_DIR"
+NIBBLE_SKILLS_DIR="$HOME/.nibble/skills"
+mkdir -p "$CLAUDE_SKILLS_DIR" "$NIBBLE_SKILLS_DIR"
 
 for skill_dir in "$REPO_DIR/skills"/{factory,nibble}-*/; do
-    skill_name="$(basename "$skill_dir")"
-    dest="$CLAUDE_SKILLS_DIR/$skill_name"
-    mkdir -p "$dest"
-    cp "$skill_dir/SKILL.md" "$dest/SKILL.md"
-    ok "skill: $skill_name → $dest/"
+    [ -d "$skill_dir" ] || continue
+    install_skill "$skill_dir" "$CLAUDE_SKILLS_DIR"
+    install_skill "$skill_dir" "$NIBBLE_SKILLS_DIR"
 done
 
-# ── 4b. Install Pi extension ──────────────────────────────────────────────────
-# The Pi extension captures session events and triggers summarization.
-PI_EXTENSIONS_DIR="$HOME/.pi/agent/extensions"
-if [ -d "$PI_EXTENSIONS_DIR" ] || [ -d "$HOME/.pi" ]; then
-    mkdir -p "$PI_EXTENSIONS_DIR"
-    cp "$REPO_DIR/extension/nibble-memory.ts" "$PI_EXTENSIONS_DIR/nibble-memory.ts"
-    ok "pi extension: nibble-memory.ts → $PI_EXTENSIONS_DIR/"
-else
-    warn "~/.pi/ not found — skipping Pi extension install"
-    warn "  (it will be installed automatically when you spawn a Pi sandbox)"
+# ── 4b. Install Pi extensions ─────────────────────────────────────────────────
+# Nibble-managed Pi extensions live in pi-extensions/ and are installed to
+# ~/.pi/agent/extensions/ and ~/.nibble/extensions/ for use by agents.
+NIBBLE_EXT_DIR="$HOME/.nibble/extensions"
+PI_EXT_DIR="$HOME/.pi/agent/extensions"
+mkdir -p "$NIBBLE_EXT_DIR"
+for ext_file in "$REPO_DIR/pi-extensions/"*.ts; do
+    [ -f "$ext_file" ] || continue
+    ext_name="$(basename "$ext_file")"
+    cp "$ext_file" "$NIBBLE_EXT_DIR/$ext_name"
+    ok "pi extension: $ext_name → ~/.nibble/extensions/"
+    if [ -d "$PI_EXT_DIR" ] || [ -d "$HOME/.pi" ]; then
+        mkdir -p "$PI_EXT_DIR"
+        if [ -L "$PI_EXT_DIR/$ext_name" ]; then
+            rm -f "$PI_EXT_DIR/$ext_name"
+        fi
+        cp "$ext_file" "$PI_EXT_DIR/$ext_name"
+        ok "pi extension: $ext_name → ~/.pi/agent/extensions/ (copy)"
+    fi
+done
+if [ ! -d "$HOME/.pi" ]; then
+    warn "~/.pi/ not found — extensions staged in ~/.nibble/extensions/ only"
+    warn "  (will be installed automatically when you spawn a Pi sandbox)"
 fi
 
 # ── 4c. Install Claude Code statusline ────────────────────────────────────────
@@ -329,18 +353,6 @@ else
     warn "jq not found — could not configure statusLine in settings.json"
     warn "Add manually: { \"statusLine\": { \"type\": \"command\", \"command\": \"bash \$HOME/.claude/statusline-command.sh\" } }"
 fi
-
-# ── 4c. Install global AGENTS.md for OpenCode ─────────────────────────────────
-# OpenCode loads ~/.config/opencode/AGENTS.md for every project as a global
-# system prompt.  We extract only the section between <!-- nibble:global:begin -->
-# and <!-- nibble:global:end --> from AGENTS.md — that contains the factory
-# pipeline instructions without the sandbox-specific environment/toolchain blocks
-# that only apply inside nibble containers.
-OPENCODE_CONFIG_DIR="$HOME/.config/opencode"
-mkdir -p "$OPENCODE_CONFIG_DIR"
-awk '/<!-- nibble:global:begin -->/{found=1; next} /<!-- nibble:global:end -->/{found=0; next} found' \
-    "$REPO_DIR/AGENTS.md" > "$OPENCODE_CONFIG_DIR/AGENTS.md"
-ok "global AGENTS.md → $OPENCODE_CONFIG_DIR/AGENTS.md (extracted from AGENTS.md)"
 
 # Check shell aliases
 SHELL_RC=""
@@ -475,7 +487,7 @@ step "Installing Claude Code hooks"
 
 mkdir -p "$HOME/.claude"
 
-# Pre-remove any existing nibble/agent-inbox hooks so setup-claude-hooks.sh always
+# Pre-remove any existing nibble hooks so setup-claude-hooks.sh always
 # writes the latest version.
 if grep -q "AGENT_TASK_ID" "$CLAUDE_SETTINGS" 2>/dev/null; then
     if command -v jq >/dev/null 2>&1; then

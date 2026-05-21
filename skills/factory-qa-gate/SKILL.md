@@ -1,6 +1,6 @@
 ---
 name: factory-qa-gate
-AI Factory — QA Gate. Fires for any tier on Critical/High findings. Always fires for Full tier. Present findings for human approval.
+description: AI Factory — QA Gate. Fires for any tier on Critical/High findings. Always fires for Full tier. Present findings for human approval.
 ---
 
 # Stage: QA Gate

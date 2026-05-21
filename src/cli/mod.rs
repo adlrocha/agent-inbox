@@ -100,7 +100,7 @@ pub enum ReportAction {
     Start {
         /// Task ID (UUID)
         task_id: String,
-        /// Agent type (claude_code, opencode, etc.)
+        /// Agent type (claude_code, pi, etc.)
         agent_type: String,
         /// Working directory
         cwd: String,
@@ -122,12 +122,12 @@ pub enum ReportAction {
 
     /// Store the agent session ID so the next attach can resume it
     ///
-    /// Called by the Claude Stop hook and the opencode post-exit epilogue.
+    /// Called by the Claude Stop hook.
     #[command(name = "session-id")]
     SessionId {
         /// Task ID
         task_id: String,
-        /// Agent session ID (Claude UUID or opencode ses_... ID)
+        /// Agent session ID (Claude UUID)
         session_id: String,
     },
 }
@@ -159,7 +159,7 @@ pub enum SandboxAction {
         /// Default is controlled by factory.enabled in ~/.nibble/config.toml.
         #[arg(long)]
         factory: Option<bool>,
-        /// Use Hermes Agent instead of Claude Code / OpenCode.
+        /// Use Hermes Agent instead of Claude Code.
         /// Spawns a dedicated Hermes container with gateway support.
         #[arg(long)]
         hermes: bool,
@@ -189,10 +189,7 @@ pub enum SandboxAction {
         /// Useful for ad-hoc research or non-conflicting changes alongside a main session.
         #[arg(long)]
         btw: bool,
-        /// Use opencode instead of Claude Code as the coding agent
-        #[arg(long)]
-        opencode: bool,
-        /// Use Hermes Agent instead of Claude Code / OpenCode
+        /// Use Hermes Agent instead of Claude Code
         #[arg(long)]
         hermes: bool,
         /// Use Pi (pi.dev) coding agent instead of Claude Code
@@ -517,7 +514,7 @@ pub enum MemoryAction {
 pub enum SessionAction {
     /// List all discoverable sessions across agents (browser-history style)
     List {
-        /// Filter by agent type: claude, pi, opencode, hermes
+        /// Filter by agent type: claude, pi, hermes
         #[arg(short, long)]
         agent: Option<String>,
         /// Filter by repo/workspace path substring

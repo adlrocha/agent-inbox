@@ -5,7 +5,7 @@
 - **Ports forwarded** to the host: services on `localhost:3000`, `:8080`, etc. are reachable from outside
 - **Internet access** is available
 - **Git** is configured with the host user's identity and SSH keys
-- Both `claude` and `opencode` are available if you need a nested agent session
+- `claude` is available if you need a nested agent session
 
 ## Toolchain Setup
 

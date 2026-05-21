@@ -56,10 +56,7 @@ Each file is plain markdown with YAML frontmatter (`name`, `description`) for sk
 ## Installation
 
 `install.sh` copies all `skills/factory-*/SKILL.md` directories to `~/.claude/skills/`,
-which both Claude Code and OpenCode scan automatically.
-
-A global `~/.config/opencode/AGENTS.md` is also written, giving OpenCode the factory
-pipeline instructions as part of its global system prompt.
+which Claude Code scans automatically.
 
 ## When to skip the pipeline
 

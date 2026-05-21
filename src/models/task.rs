@@ -14,8 +14,6 @@ pub enum AgentType {
     /// Claude Code (Anthropic) — the default agent.
     #[default]
     ClaudeCode,
-    /// OpenCode — open-source coding agent.
-    OpenCode,
     /// Hermes Agent (NousResearch) — open-source coding agent with gateway support.
     Hermes,
     /// Pi (pi.dev) — coding agent with multi-provider LLM support.
@@ -30,7 +28,6 @@ impl AgentType {
     pub fn as_str(&self) -> &str {
         match self {
             AgentType::ClaudeCode => "claude_code",
-            AgentType::OpenCode => "opencode",
             AgentType::Hermes => "hermes",
             AgentType::Pi => "pi",
             AgentType::Unknown(s) => s.as_str(),
@@ -44,7 +41,6 @@ impl FromStr for AgentType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s {
             "claude_code" => AgentType::ClaudeCode,
-            "opencode" => AgentType::OpenCode,
             "hermes" => AgentType::Hermes,
             "pi" => AgentType::Pi,
             other => AgentType::Unknown(other.to_string()),
@@ -190,9 +186,6 @@ pub struct TaskContext {
     /// Session ID for Claude Code (UUID format, used with `--resume` / `--session-id`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claude_session_id: Option<String>,
-    /// Session ID for opencode (`ses_...` format, used with `--session`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub opencode_session_id: Option<String>,
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
 }
@@ -455,13 +448,10 @@ mod tests {
         );
     }
 
-    /// AC-2: known string "opencode" parses to OpenCode
+    /// AC-2: known string "hermes" parses to Hermes
     #[test]
-    fn test_ac2_agent_type_from_str_opencode() {
-        assert_eq!(
-            AgentType::from_str("opencode").unwrap(),
-            AgentType::OpenCode
-        );
+    fn test_ac2_agent_type_from_str_hermes() {
+        assert_eq!(AgentType::from_str("hermes").unwrap(), AgentType::Hermes);
     }
 
     /// AC-3: unknown string becomes Unknown variant (infallible)
@@ -477,7 +467,7 @@ mod tests {
     #[test]
     fn test_ac4_agent_type_as_str() {
         assert_eq!(AgentType::ClaudeCode.as_str(), "claude_code");
-        assert_eq!(AgentType::OpenCode.as_str(), "opencode");
+        assert_eq!(AgentType::Hermes.as_str(), "hermes");
         assert_eq!(AgentType::Unknown("my_bot".to_string()).as_str(), "my_bot");
     }
 
@@ -486,7 +476,6 @@ mod tests {
     fn test_inv1_agent_type_round_trip() {
         let variants = [
             AgentType::ClaudeCode,
-            AgentType::OpenCode,
             AgentType::Hermes,
             AgentType::Pi,
             AgentType::Unknown("future_agent".to_string()),
@@ -504,7 +493,7 @@ mod tests {
     /// INV-2: from_str is infallible — any string produces Ok(Unknown(_))
     #[test]
     fn test_inv2_agent_type_from_str_infallible() {
-        for s in &["", "   ", "CLAUDE_CODE", "openCode", "🤖", "a/b"] {
+        for s in &["", "   ", "CLAUDE_CODE", "futureAgent", "🤖", "a/b"] {
             let result = AgentType::from_str(s);
             assert!(
                 result.is_ok(),

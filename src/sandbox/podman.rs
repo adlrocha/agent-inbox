@@ -91,7 +91,7 @@ impl PodmanSandbox {
         self.generate_standard_dockerfile()
     }
 
-    /// Standard Dockerfile for Claude Code + OpenCode sandboxes.
+    /// Standard Dockerfile for Claude Code sandboxes.
     fn generate_standard_dockerfile(&self) -> String {
         r#"FROM node:22-slim
 
@@ -121,13 +121,8 @@ USER node
 # Install Claude Code via the official installer (installs to ~/.local/bin/claude)
 RUN curl -fsSL https://claude.ai/install.sh | bash
 
-# Install opencode via the official installer (latest at image build time).
-# nibble also runs `opencode upgrade` at every sandbox spawn to keep it current
-# between image rebuilds. Claude Code self-updates automatically at runtime.
-RUN curl -fsSL https://opencode.ai/install | bash
-
-# Add ~/.local/bin (claude) and ~/.opencode/bin (opencode) to PATH
-ENV PATH=/home/node/.local/bin:/home/node/.opencode/bin:/usr/local/bin:$PATH
+# Add ~/.local/bin (claude) to PATH
+ENV PATH=/home/node/.local/bin:/usr/local/bin:$PATH
 
 CMD ["bash"]
 "#
@@ -476,27 +471,6 @@ impl Sandbox for PodmanSandbox {
         if nibble_bin.exists() {
             args.push("-v".to_string());
             args.push(format!("{}:/usr/local/bin/nibble:ro", nibble_bin.display()));
-        }
-
-        // Mount opencode config + data so `attach --opencode` opens with the
-        // host's auth tokens and provider settings already in place.
-        // ~/.config/opencode — config, provider settings, auth tokens
-        // ~/.local/share/opencode — opencode.db (SQLite with auth + sessions)
-        let opencode_config_dir = home_dir.join(".config").join("opencode");
-        if opencode_config_dir.exists() {
-            args.push("-v".to_string());
-            args.push(format!(
-                "{}:/home/node/.config/opencode:rw",
-                opencode_config_dir.display()
-            ));
-        }
-        let opencode_data_dir = home_dir.join(".local").join("share").join("opencode");
-        if opencode_data_dir.exists() {
-            args.push("-v".to_string());
-            args.push(format!(
-                "{}:/home/node/.local/share/opencode:rw",
-                opencode_data_dir.display()
-            ));
         }
 
         // Mount nibble config (Telegram token etc.) so hooks can send notifications.

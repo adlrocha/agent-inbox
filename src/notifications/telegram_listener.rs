@@ -644,7 +644,6 @@ fn handle_spawn_command(
             false, // fresh
             None,  // session_id
             true,  // no_attach
-            false, // opencode
             false, // factory
             false, // hermes
             false, // pi
@@ -1087,7 +1086,6 @@ fn find_or_spawn_for_cron(
         false,
         None,
         true,
-        false,
         cfg.factory.enabled,
         false,
         false,

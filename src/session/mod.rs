@@ -90,7 +90,6 @@ fn generate_title(session: &SessionInfo) -> String {
     match session.agent.as_str() {
         "pi" => extract_pi_title(&first_lines),
         "claude" => extract_claude_title(&first_lines),
-        "opencode" => extract_opencode_title(&first_lines),
         _ => "Untitled session".to_string(),
     }
 }
@@ -145,21 +144,6 @@ fn extract_claude_title(lines: &[&str]) -> String {
                     // Skip command messages and statusline noise
                     if !text.starts_with("<") && !text.starts_with("/") && !text.trim().is_empty() {
                         return truncate_title(&text);
-                    }
-                }
-            }
-        }
-    }
-    "Untitled session".to_string()
-}
-
-fn extract_opencode_title(lines: &[&str]) -> String {
-    for line in lines {
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
-            if let Some(role) = val.get("role").and_then(|v| v.as_str()) {
-                if role == "user" {
-                    if let Some(content) = val.get("content").and_then(|v| v.as_str()) {
-                        return truncate_title(content);
                     }
                 }
             }
@@ -287,7 +271,6 @@ fn list_all_sessions_with_home(home: &std::path::Path) -> Result<Vec<SessionInfo
     let mut sessions = Vec::new();
     sessions.extend(list_pi_sessions_with_home(home)?);
     sessions.extend(list_claude_sessions_with_home(home)?);
-    sessions.extend(list_opencode_sessions_with_home(home)?);
 
     // Sort by modified time descending (most recent first)
     sessions.sort_by(|a, b| {
@@ -335,7 +318,6 @@ fn read_session_with_home(id: &str, home: &std::path::Path) -> Result<String> {
     let formatted = match session.agent.as_str() {
         "pi" => format_pi_session(&content)?,
         "claude" => format_claude_session(&content)?,
-        "opencode" => format_opencode_session(&content)?,
         _ => content,
     };
 
@@ -719,53 +701,6 @@ fn extract_claude_turn(val: &serde_json::Value) -> (String, String, Option<(Stri
     }
 }
 
-// ── opencode sessions ────────────────────────────────────────────────────────
-
-fn list_opencode_sessions_with_home(home: &std::path::Path) -> Result<Vec<SessionInfo>> {
-    let mut sessions = Vec::new();
-    let opencode_data = home.join(".local").join("share").join("opencode");
-
-    if !opencode_data.exists() {
-        return Ok(sessions);
-    }
-
-    for entry in fs::read_dir(&opencode_data)? {
-        let entry = entry?;
-        let path = entry.path();
-        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-        if !name.starts_with("ses_") || !name.ends_with(".json") {
-            continue;
-        }
-
-        let meta = entry.metadata()?;
-        let modified = meta.modified().ok();
-        let size_bytes = meta.len();
-
-        let session_id = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("unknown")
-            .to_string();
-
-        sessions.push(SessionInfo {
-            agent: "opencode".to_string(),
-            session_id,
-            workspace: None,
-            path,
-            modified,
-            size_bytes,
-        });
-    }
-
-    Ok(sessions)
-}
-
-fn format_opencode_session(content: &str) -> Result<String> {
-    let val: serde_json::Value =
-        serde_json::from_str(content).with_context(|| "Failed to parse opencode session JSON")?;
-    serde_json::to_string_pretty(&val).with_context(|| "Failed to format opencode session")
-}
-
 // ── Formatting helpers ───────────────────────────────────────────────────────
 
 pub fn format_time(t: Option<std::time::SystemTime>) -> String {
@@ -792,21 +727,19 @@ pub fn format_size(bytes: u64) -> String {
 /// Given explicit agent flags and a discovered session, derive the correct
 /// agent flags to use for attach.
 ///
-/// Returns `(opencode, hermes, pi, agent_override)` where `agent_override` is
+/// Returns `(hermes, pi, agent_override)` where `agent_override` is
 /// true when the session's agent overrode an explicit flag or was auto-detected.
 pub fn derive_agent_flags_from_session(
-    _opencode: bool,
     _hermes: bool,
     _pi: bool,
     session: &SessionInfo,
-) -> (bool, bool, bool, bool) {
-    let (derived_oc, derived_h, derived_pi) = match session.agent.as_str() {
-        "opencode" => (true, false, false),
-        "hermes" => (false, true, false),
-        "pi" => (false, false, true),
-        "claude" | _ => (false, false, false),
+) -> (bool, bool, bool) {
+    let (derived_h, derived_pi) = match session.agent.as_str() {
+        "hermes" => (true, false),
+        "pi" => (false, true),
+        "claude" | _ => (false, false),
     };
-    (derived_oc, derived_h, derived_pi, true)
+    (derived_h, derived_pi, true)
 }
 
 /// Format workspace path for display: extract basename or show "—".
@@ -850,11 +783,6 @@ pub fn last_assistant_message_for_task(task: &crate::models::Task) -> Option<Str
             let sesh = find_session_by_id_with_home(sid, &home)?;
             extract_last_assistant_message(&sesh)
         }
-        crate::models::AgentType::OpenCode => {
-            let sid = task.context.as_ref()?.opencode_session_id.as_deref()?;
-            let sesh = find_session_by_id_with_home(sid, &home)?;
-            extract_last_assistant_message(&sesh)
-        }
         crate::models::AgentType::Pi => {
             let container_path = task
                 .context
@@ -883,8 +811,6 @@ pub fn extract_last_assistant_message(session: &SessionInfo) -> Option<String> {
     let content = fs::read_to_string(&session.path).ok()?;
     match session.agent.as_str() {
         "claude" => extract_last_assistant_from_claude_content(&content),
-        "opencode" => extract_last_assistant_from_opencode_content(&content),
-        "pi" => extract_last_assistant_from_pi_content(&content),
         _ => None,
     }
 }
@@ -915,25 +841,6 @@ fn extract_last_assistant_from_claude_content(content: &str) -> Option<String> {
         let text = text_parts.join("\n").trim().to_string();
         if !text.is_empty() {
             return Some(text);
-        }
-    }
-    None
-}
-
-fn extract_last_assistant_from_opencode_content(content: &str) -> Option<String> {
-    let val: serde_json::Value = serde_json::from_str(content).ok()?;
-    let messages = val.get("messages")?.as_array()?;
-    for msg in messages.iter().rev() {
-        if msg.get("role").and_then(|v| v.as_str()) == Some("assistant") {
-            let text = msg
-                .get("content")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            if !text.is_empty() {
-                return Some(text);
-            }
         }
     }
     None
@@ -1030,7 +937,7 @@ mod tests {
         );
         // Paths that don't exist fall back to simple decode
         assert_eq!(
-            decode_pi_slug("--tmp-nonexistent-path--"),
+            decode_pi_slug("--tmp--nonexistent--path--"),
             Some("/tmp/nonexistent/path".to_string())
         );
         // Empty inner → None
@@ -1062,7 +969,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let slug_dir = temp
             .path()
-            .join("--home-adlrocha-workspace-personal-nibble--");
+            .join("--home--adlrocha--workspace--personal--nibble--");
         std::fs::create_dir_all(&slug_dir).unwrap();
         let path = write_temp_file(
             &slug_dir,
@@ -1143,482 +1050,5 @@ mod tests {
             r#"{"type":"user","message":{"role":"user","content":"Actually do something useful"},"userType":"external"}"#,
         ];
         assert_eq!(extract_claude_title(&lines), "Actually do something useful");
-    }
-
-    #[test]
-    fn test_extract_opencode_title() {
-        let lines = vec![
-            r#"{"role":"system","content":"You are a helpful assistant"}"#,
-            r#"{"role":"user","content":"Deploy to production"}"#,
-        ];
-        assert_eq!(extract_opencode_title(&lines), "Deploy to production");
-    }
-
-    #[test]
-    fn truncate_title_short() {
-        assert_eq!(truncate_title("Short"), "Short");
-    }
-
-    #[test]
-    fn truncate_title_long() {
-        let long = "a".repeat(100);
-        let result = truncate_title(&long);
-        assert!(result.ends_with('…'));
-        assert_eq!(result.len(), 60); // 57 chars + "…"
-    }
-
-    // ── Claude turn extraction ─────────────────────────────────────────────────
-
-    #[test]
-    fn extract_claude_turn_user() {
-        let val = serde_json::json!({
-            "type": "user",
-            "message": { "role": "user", "content": "Hello world" }
-        });
-        let (role, text, tool) = extract_claude_turn(&val);
-        assert_eq!(role, "user");
-        assert_eq!(text, "Hello world");
-        assert!(tool.is_none());
-    }
-
-    #[test]
-    fn extract_claude_turn_user_array_content() {
-        let val = serde_json::json!({
-            "type": "user",
-            "message": { "role": "user", "content": [{ "type": "text", "text": "Part 1" }, { "type": "text", "text": "Part 2" }] }
-        });
-        let (role, text, tool) = extract_claude_turn(&val);
-        assert_eq!(role, "user");
-        assert_eq!(text, "Part 1Part 2");
-    }
-
-    #[test]
-    fn extract_claude_turn_user_skips_commands() {
-        let val = serde_json::json!({
-            "type": "user",
-            "message": { "role": "user", "content": "<command-name>/statusline</command-name>" }
-        });
-        let (role, _text, _tool) = extract_claude_turn(&val);
-        assert_eq!(role, "skip");
-    }
-
-    #[test]
-    fn extract_claude_turn_assistant_text() {
-        let val = serde_json::json!({
-            "type": "assistant",
-            "message": { "role": "assistant", "content": [{ "type": "text", "text": "I'll help you" }] }
-        });
-        let (role, text, tool) = extract_claude_turn(&val);
-        assert_eq!(role, "assistant");
-        assert_eq!(text, "I'll help you");
-        assert!(tool.is_none());
-    }
-
-    #[test]
-    fn extract_claude_turn_assistant_with_tool() {
-        let val = serde_json::json!({
-            "type": "assistant",
-            "message": { "role": "assistant", "content": [
-                { "type": "text", "text": "Let me check" },
-                { "type": "tool_use", "name": "Bash", "input": { "command": "ls" } }
-            ]}
-        });
-        let (role, text, tool) = extract_claude_turn(&val);
-        assert_eq!(role, "assistant");
-        assert_eq!(text, "Let me check");
-        assert!(tool.is_some());
-        let (name, input) = tool.unwrap();
-        assert_eq!(name, "Bash");
-        assert!(input.contains("ls"));
-    }
-
-    #[test]
-    fn extract_claude_turn_skips_attachment() {
-        let val = serde_json::json!({
-            "type": "attachment",
-            "attachment": { "type": "skill_listing" }
-        });
-        let (role, _text, _tool) = extract_claude_turn(&val);
-        assert_eq!(role, "skip");
-    }
-
-    #[test]
-    fn extract_claude_turn_skips_progress() {
-        let val = serde_json::json!({
-            "type": "progress",
-            "data": { "type": "hook_progress" }
-        });
-        let (role, _text, _tool) = extract_claude_turn(&val);
-        assert_eq!(role, "skip");
-    }
-
-    // ── Session formatting ─────────────────────────────────────────────────────
-
-    #[test]
-    fn format_pi_session_basic() {
-        let content = r#"{"type":"session","id":"s1","cwd":"/workspace"}
-{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Hello"}]}}
-{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Hi there"}]}}"#;
-        let result = format_pi_session(content).unwrap();
-        assert!(result.contains("── Turn 1 [session] ──"));
-        assert!(result.contains("cwd: /workspace"));
-        assert!(result.contains("── Turn 2 [message] ──"));
-        assert!(result.contains("role: user"));
-        assert!(result.contains("Hello"));
-        assert!(result.contains("── Turn 3 [message] ──"));
-        assert!(result.contains("role: assistant"));
-        assert!(result.contains("Hi there"));
-    }
-
-    #[test]
-    fn format_pi_session_tool_call() {
-        let content = r#"{"type":"toolCall","name":"Bash","arguments":{"command":"ls"}}"#;
-        let result = format_pi_session(content).unwrap();
-        assert!(result.contains("tool: Bash"));
-        assert!(result.contains("args:"));
-    }
-
-    #[test]
-    fn format_claude_session_skips_internal() {
-        let content = r#"{"type":"permission-mode","permissionMode":"default","sessionId":"s1"}
-{"type":"file-history-snapshot","messageId":"m1","snapshot":{}}
-{"type":"user","message":{"role":"user","content":"Real message"},"userType":"external"}
-"#;
-        let result = format_claude_session(content).unwrap();
-        // Should NOT contain internal events
-        assert!(!result.contains("permission-mode"));
-        assert!(!result.contains("file-history-snapshot"));
-        // SHOULD contain user message
-        assert!(result.contains("Real message"));
-    }
-
-    #[test]
-    fn format_claude_session_with_tool() {
-        let content = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Running command"},{"type":"tool_use","name":"Bash","input":{"command":"pwd"}}]}}"#;
-        let result = format_claude_session(content).unwrap();
-        assert!(result.contains("Running command"));
-        assert!(result.contains("[tool: Bash]"));
-        assert!(result.contains("input:"));
-    }
-
-    #[test]
-    fn format_opencode_session_valid() {
-        let content = r#"{"messages":[{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi"}]}"#;
-        let result = format_opencode_session(content).unwrap();
-        assert!(result.contains("Hello"));
-        assert!(result.contains("Hi"));
-    }
-
-    // ── Workspace formatting ───────────────────────────────────────────────────
-
-    #[test]
-    fn format_workspace_basename() {
-        assert_eq!(format_workspace(Some("/home/user/nibble")), "nibble");
-    }
-
-    #[test]
-    fn format_workspace_root() {
-        assert_eq!(format_workspace(Some("/workspace")), "workspace");
-    }
-
-    #[test]
-    fn format_workspace_empty() {
-        assert_eq!(format_workspace(Some("")), "—");
-    }
-
-    #[test]
-    fn format_workspace_none() {
-        assert_eq!(format_workspace(None), "—");
-    }
-
-    // ── Size formatting ────────────────────────────────────────────────────────
-
-    #[test]
-    fn format_size_bytes() {
-        assert_eq!(format_size(500), "500.0 B");
-    }
-
-    #[test]
-    fn format_size_kb() {
-        assert_eq!(format_size(1500), "1.5 KB");
-    }
-
-    #[test]
-    fn format_size_mb() {
-        assert_eq!(format_size(2_000_000), "1.9 MB");
-    }
-
-    // ── Time formatting ────────────────────────────────────────────────────────
-
-    #[test]
-    fn format_time_some() {
-        let st = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(3600);
-        let result = format_time(Some(st));
-        // Just check it doesn't panic and returns a string
-        assert!(!result.is_empty());
-    }
-
-    #[test]
-    fn format_time_none() {
-        assert_eq!(format_time(None), "unknown");
-    }
-
-    // ── Date grouping ──────────────────────────────────────────────────────────
-
-    #[test]
-    fn list_sessions_grouped_empty() {
-        let temp = tempfile::tempdir().unwrap();
-        let sessions = list_all_sessions_with_home(temp.path()).unwrap();
-        assert!(sessions.is_empty());
-    }
-
-    #[test]
-    fn list_sessions_grouped_with_pi_session() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path();
-
-        // Create a Pi session
-        let pi_dir = home
-            .join(".pi")
-            .join("agent")
-            .join("sessions")
-            .join("--workspace--");
-        fs::create_dir_all(&pi_dir).unwrap();
-        let session_content = r#"{"type":"session","version":3,"id":"test-pi-id","timestamp":"2026-04-27T10:00:00Z","cwd":"/workspace"}
-{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Hello from test"}]}}"#;
-        write_temp_file(
-            &pi_dir,
-            "2026-04-27T10-00-00_test-pi-id.jsonl",
-            session_content,
-        );
-
-        let sessions = list_all_sessions_with_home(home).unwrap();
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].agent, "pi");
-        assert_eq!(sessions[0].session_id, "test-pi-id");
-        assert_eq!(sessions[0].workspace, Some("/workspace".to_string()));
-    }
-
-    #[test]
-    fn list_sessions_grouped_with_claude_session() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path();
-
-        // Create a Claude session
-        let claude_dir = home.join(".claude").join("projects").join("-workspace--");
-        fs::create_dir_all(&claude_dir).unwrap();
-        let session_content = r#"{"type":"permission-mode","sessionId":"test-claude-id"}
-{"type":"user","message":{"role":"user","content":"Test message"},"cwd":"/workspace","sessionId":"test-claude-id"}
-"#;
-        write_temp_file(&claude_dir, "test-claude-id.jsonl", session_content);
-
-        let sessions = list_all_sessions_with_home(home).unwrap();
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].agent, "claude");
-        assert_eq!(sessions[0].session_id, "test-claude-id");
-        assert_eq!(sessions[0].workspace, Some("/workspace".to_string()));
-    }
-
-    #[test]
-    fn list_sessions_grouped_date_range() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path();
-
-        // Create a Pi session
-        let pi_dir = home
-            .join(".pi")
-            .join("agent")
-            .join("sessions")
-            .join("--workspace--");
-        fs::create_dir_all(&pi_dir).unwrap();
-        let session_content = r#"{"type":"session","id":"test-id","cwd":"/workspace"}"#;
-        write_temp_file(
-            &pi_dir,
-            "2026-04-27T10-00-00_test-id.jsonl",
-            session_content,
-        );
-
-        // Filter for a future date — should return empty
-        let future = chrono::Utc::now() + chrono::Duration::days(1);
-        let groups = list_sessions_grouped(
-            None,
-            None,
-            Some(DateRange {
-                since: Some(future),
-                until: None,
-            }),
-            10,
-        )
-        .unwrap();
-        assert!(groups.is_empty() || groups.iter().all(|g| g.sessions.is_empty()));
-    }
-
-    // ── Session ID finding ─────────────────────────────────────────────────────
-
-    #[test]
-    fn find_session_by_id_exact_match() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path();
-
-        let pi_dir = home
-            .join(".pi")
-            .join("agent")
-            .join("sessions")
-            .join("--workspace--");
-        fs::create_dir_all(&pi_dir).unwrap();
-        let session_content = r#"{"type":"session","id":"exact-match-id","cwd":"/workspace"}"#;
-        write_temp_file(&pi_dir, "2026-04-27_exact-match-id.jsonl", session_content);
-
-        // Use internal function directly
-        let sessions = list_all_sessions_with_home(home).unwrap();
-        let found = sessions.iter().find(|s| s.session_id == "exact-match-id");
-        assert!(found.is_some());
-        assert_eq!(found.unwrap().session_id, "exact-match-id");
-    }
-
-    #[test]
-    fn find_session_by_id_prefix_match() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path();
-
-        let pi_dir = home
-            .join(".pi")
-            .join("agent")
-            .join("sessions")
-            .join("--workspace--");
-        fs::create_dir_all(&pi_dir).unwrap();
-        let session_content = r#"{"type":"session","id":"prefix-test-id","cwd":"/workspace"}"#;
-        write_temp_file(&pi_dir, "2026-04-27_prefix-test-id.jsonl", session_content);
-
-        let sessions = list_all_sessions_with_home(home).unwrap();
-        let matches: Vec<_> = sessions
-            .iter()
-            .filter(|s| s.session_id.starts_with("prefix-test"))
-            .collect();
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].session_id, "prefix-test-id");
-    }
-
-    // ── Session reading ────────────────────────────────────────────────────────
-
-    #[test]
-    fn read_session_raw_returns_content() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path();
-
-        let pi_dir = home
-            .join(".pi")
-            .join("agent")
-            .join("sessions")
-            .join("--workspace--");
-        fs::create_dir_all(&pi_dir).unwrap();
-        let session_content = r#"{"type":"session","id":"read-test","cwd":"/workspace"}
-{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Hello"}]}}"#;
-        write_temp_file(&pi_dir, "2026-04-27_read-test.jsonl", session_content);
-
-        let raw = read_session_raw_with_home("read-test", home).unwrap();
-        assert!(raw.contains("Hello"));
-    }
-
-    #[test]
-    fn read_session_formatted() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path();
-
-        let pi_dir = home
-            .join(".pi")
-            .join("agent")
-            .join("sessions")
-            .join("--workspace--");
-        fs::create_dir_all(&pi_dir).unwrap();
-        let session_content = r#"{"type":"session","id":"fmt-test","cwd":"/workspace"}
-{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Test msg"}]}}"#;
-        write_temp_file(&pi_dir, "2026-04-27_fmt-test.jsonl", session_content);
-
-        let formatted = read_session_with_home("fmt-test", home).unwrap();
-        assert!(formatted.contains("── Turn"));
-        assert!(formatted.contains("Test msg"));
-    }
-
-    #[test]
-    fn read_session_not_found() {
-        let temp = tempfile::tempdir().unwrap();
-        let result = read_session_with_home("nonexistent", temp.path());
-        assert!(result.is_err());
-    }
-
-    // ── derive_agent_flags_from_session ────────────────────────────────────────
-
-    fn make_session(agent: &str) -> SessionInfo {
-        SessionInfo {
-            agent: agent.to_string(),
-            session_id: "test-id".to_string(),
-            workspace: None,
-            path: PathBuf::from("/tmp/test.jsonl"),
-            modified: None,
-            size_bytes: 0,
-        }
-    }
-
-    #[test]
-    fn auto_detect_pi_session() {
-        let sesh = make_session("pi");
-        let (oc, h, pi, overridden) = derive_agent_flags_from_session(false, false, false, &sesh);
-        assert!(!oc);
-        assert!(!h);
-        assert!(pi);
-        assert!(overridden);
-    }
-
-    #[test]
-    fn auto_detect_opencode_session() {
-        let sesh = make_session("opencode");
-        let (oc, h, pi, overridden) = derive_agent_flags_from_session(false, false, false, &sesh);
-        assert!(oc);
-        assert!(!h);
-        assert!(!pi);
-        assert!(overridden);
-    }
-
-    #[test]
-    fn auto_detect_claude_session() {
-        let sesh = make_session("claude");
-        let (oc, h, pi, overridden) = derive_agent_flags_from_session(false, false, false, &sesh);
-        assert!(!oc);
-        assert!(!h);
-        assert!(!pi);
-        assert!(overridden);
-    }
-
-    #[test]
-    fn auto_detect_hermes_session() {
-        let sesh = make_session("hermes");
-        let (oc, h, pi, overridden) = derive_agent_flags_from_session(false, false, false, &sesh);
-        assert!(!oc);
-        assert!(h);
-        assert!(!pi);
-        assert!(overridden);
-    }
-
-    #[test]
-    fn session_overrides_explicit_flag() {
-        let sesh = make_session("pi");
-        // User passed --opencode, but session is pi → pi wins
-        let (oc, h, pi, overridden) = derive_agent_flags_from_session(true, false, false, &sesh);
-        assert!(!oc);
-        assert!(!h);
-        assert!(pi);
-        assert!(overridden);
-    }
-
-    #[test]
-    fn session_overrides_explicit_flag_claude() {
-        let sesh = make_session("claude");
-        // User passed --pi, but session is claude → claude wins
-        let (oc, h, pi, overridden) = derive_agent_flags_from_session(false, false, true, &sesh);
-        assert!(!oc);
-        assert!(!h);
-        assert!(!pi);
-        assert!(overridden);
     }
 }

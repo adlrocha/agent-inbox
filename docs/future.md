@@ -1,4 +1,4 @@
-# Future Features for Agent Inbox Cron
+# Future Features for Nibble Cron
 
 This document tracks features that were discussed but deferred for future iterations.
 

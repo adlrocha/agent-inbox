@@ -184,7 +184,7 @@ author_email = "nibble@local"
 
 - **LLM extraction is disabled**: We use heuristic summarization (first user message = title, turn counts, tool list). LLM-based extraction is planned for when a reliable local model is available.
 - **Session linkage uses task IDs**: `nibble memory by-session` takes the nibble task ID, not the agent's internal session ID. This is because memories are stored by task_id.
-- **opencode support is minimal**: opencode sessions are discovered but not auto-captured. You can still archive them manually with `nibble memory archive`.
+- **Pi sessions require container paths**: Pi session paths are stored as container paths; the `by-session` lookup converts them back to host paths.
 
 ## Files
 

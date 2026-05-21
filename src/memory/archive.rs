@@ -37,10 +37,6 @@ pub fn archive_session(task_id: &str) -> Result<Option<PathBuf>> {
             .as_ref()
             .and_then(|c| c.claude_session_id.clone()),
         AgentType::Pi => task.context.as_ref().and_then(|c| c.session_id.clone()),
-        AgentType::OpenCode => task
-            .context
-            .as_ref()
-            .and_then(|c| c.opencode_session_id.clone()),
         AgentType::Hermes => task.context.as_ref().and_then(|c| c.session_id.clone()),
         AgentType::Unknown(_) => task.context.as_ref().and_then(|c| c.session_id.clone()),
     };
@@ -114,7 +110,6 @@ pub fn archive_from_path(src: &PathBuf, agent: &str, task_id: &str) -> Result<Pa
 fn agent_short_name(agent: &AgentType) -> String {
     match agent {
         AgentType::ClaudeCode => "claude".to_string(),
-        AgentType::OpenCode => "opencode".to_string(),
         AgentType::Hermes => "hermes".to_string(),
         AgentType::Pi => "pi".to_string(),
         AgentType::Unknown(s) => s.clone(),
@@ -128,13 +123,10 @@ fn find_agent_session_file(agent: &AgentType, session_id: &str) -> Option<PathBu
     match agent {
         AgentType::ClaudeCode => find_claude_session(&home, session_id),
         AgentType::Pi => find_pi_session(&home, session_id),
-        AgentType::OpenCode => find_opencode_session(&home, session_id),
         AgentType::Hermes => None, // Hermes sessions are inside the sandbox container
         AgentType::Unknown(_) => {
             // Try all known agents
-            find_claude_session(&home, session_id)
-                .or_else(|| find_pi_session(&home, session_id))
-                .or_else(|| find_opencode_session(&home, session_id))
+            find_claude_session(&home, session_id).or_else(|| find_pi_session(&home, session_id))
         }
     }
 }
@@ -179,18 +171,6 @@ fn find_pi_session(home: &PathBuf, session_id: &str) -> Option<PathBuf> {
                 return Some(file.path());
             }
         }
-    }
-    None
-}
-
-fn find_opencode_session(home: &PathBuf, session_id: &str) -> Option<PathBuf> {
-    let data_dir = home.join(".local").join("share").join("opencode");
-    if !data_dir.is_dir() {
-        return None;
-    }
-    let candidate = data_dir.join(format!("{}.json", session_id));
-    if candidate.exists() {
-        return Some(candidate);
     }
     None
 }

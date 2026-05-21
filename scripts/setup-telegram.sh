@@ -1,5 +1,5 @@
 #!/bin/bash
-# Interactive setup for Telegram notifications in agent-inbox
+# Interactive setup for Telegram notifications in nibble
 #
 # What this script does:
 #   1. Walks you through creating a Telegram bot via @BotFather
@@ -27,8 +27,8 @@ echo -e "${BOLD}Step 1: Create a Telegram bot${NC}"
 echo ""
 echo "  1. Open Telegram and search for @BotFather"
 echo "  2. Send: /newbot"
-echo "  3. Choose a name (e.g. 'My Agent Inbox')"
-echo "  4. Choose a username ending in 'bot' (e.g. 'myagentinbox_bot')"
+echo "  3. Choose a name (e.g. 'My Nibble Bot')"
+echo "  4. Choose a username ending in 'bot' (e.g. 'mynibble_bot')"
 echo "  5. BotFather will reply with a token like: 123456789:ABCdefGHIjklMNOpqrSTUvwxYZ"
 echo ""
 
@@ -131,7 +131,7 @@ echo ""
 TEST_RESPONSE=$(curl -s -X POST \
     "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
     -H "Content-Type: application/json" \
-    -d "{\"chat_id\": \"${CHAT_ID}\", \"text\": \"<b>Nibble</b> — Telegram notifications are now active! You will be notified here whenever Claude Code or OpenCode finishes a turn.\", \"parse_mode\": \"HTML\"}" \
+    -d "{\"chat_id\": \"${CHAT_ID}\", \"text\": \"<b>Nibble</b> — Telegram notifications are now active! You will be notified here whenever Claude Code finishes a turn.\", \"parse_mode\": \"HTML\"}" \
     2>/dev/null)
 
 if echo "$TEST_RESPONSE" | grep -q '"ok":true'; then
@@ -153,7 +153,7 @@ echo ""
 echo "  Next steps:"
 echo "    - Re-run  scripts/setup-claude-hooks.sh  to apply updated hooks"
 echo "    - Restart Claude Code for hooks to take effect"
-echo "    - OpenCode wrapper will notify automatically on session end"
+echo "    - Claude Code wrapper will notify automatically on session end"
 echo ""
 echo "  To disable notifications, set  enabled = false  in:"
 echo "    $CONFIG_FILE"
