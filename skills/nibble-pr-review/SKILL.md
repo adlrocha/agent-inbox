@@ -7,7 +7,7 @@ description: Track and review GitHub PRs where you are requested as a reviewer.
 
 # PR Review Skill
 
-Track pending GitHub PR reviews and perform structured code reviews using the
+Track and review GitHub PRs where you are requested as a reviewer, using the
 `gh` CLI and your coding agent capabilities.
 
 ## Prerequisites
@@ -15,22 +15,46 @@ Track pending GitHub PR reviews and perform structured code reviews using the
 - `gh` CLI installed and authenticated (`gh auth status`)
 - Git repository with a GitHub remote (or explicit `--repo owner/name`)
 
+### Authentication in nibble sandboxes
+
+`gh` credentials are **not** automatically inherited from the host. Nibble's sandbox
+spawner forwards `GITHUB_TOKEN` (and only `GITHUB_TOKEN`) into the container at
+`podman run` time. If `GITHUB_TOKEN` is not set in the host shell when the sandbox
+is spawned, `gh` will be unauthenticated inside.
+
+**To fix:** On the host, run:
+```bash
+export GITHUB_TOKEN=$(gh auth token)
+```
+then spawn or attach with `--fresh`:
+```bash
+nibble sandbox attach /path/to/repo --fresh
+```
+
+If `GITHUB_TOKEN` is already set but `gh auth status` still fails, the token may
+have expired — re-export it from the host and restart the sandbox.
+
 ## Flow
 
 ### Phase 1 — Dashboard
 
 Gather all PRs awaiting your review and present a prioritized dashboard.
 
+Use the **cross-repo search API** as the default — it covers all repos the user has
+access to and does not require being inside a specific repo's working directory:
+
 ```bash
-# List PRs where you are requested as a reviewer
-gh pr list --search "review-requested:@me state:open" --json number,title,repository,author,updatedAt,url,labels
+# Primary: search across all repos (recommended)
+gh search prs --review-requested=@me --state open --json repository,number,title,url,author,updatedAt
 ```
 
-If the user wants reviews across **multiple repos**, use the search API:
+The legacy `gh pr list --search` command requires a `--repo` flag and its `--json`
+fields differ (no `repository` field). Only use it when reviewing PRs in the
+current repo specifically:
 
 ```bash
-# Search across all repos the user has access to
-gh search prs --review-requested=@me --state open --json repository,number,title,url,author,updatedAt
+# Fallback: current repo only
+gh pr list --search "review-requested:@me state:open" --json number,title,author,updatedAt,url,labels
 ```
 
 Present results as a numbered table:
@@ -56,28 +80,30 @@ Present results as a numbered table:
 When the user picks a PR, gather full context:
 
 ```bash
-# Core PR info
-gh pr view <NUMBER> --json title,body,author,baseRefName,headRefName,additions,deletions,changedFiles,labels,reviews,comments
+# Core PR info (include url so we can link it)
+gh pr view <NUMBER> --repo <owner/repo> --json title,body,author,baseRefName,headRefName,additions,deletions,changedFiles,labels,reviews,comments,url,reviewDecision
 
 # The actual diff
-gh pr diff <NUMBER>
+gh pr diff <NUMBER> --repo <owner/repo>
 
-# Existing review comments (check if others already reviewed)
+# Existing review comments (critical for peer reviews — see Phase 2b)
 gh api repos/{owner}/{repo}/pulls/{number}/reviews
 gh api repos/{owner}/{repo}/pulls/{number}/comments
 
 # CI status
-gh pr checks <NUMBER>
+gh pr checks <NUMBER> --repo <owner/repo>
 
 # Conversation thread
-gh pr view <NUMBER> --comments
+gh pr view <NUMBER> --repo <owner/repo> --comments
 ```
 
-Present a summary to the user:
+Present a summary to the user. **Always include the direct PR URL** so the user
+can navigate to it easily:
 
 ```
 🔍 Reviewing: #42 — Refactor auth middleware
    Repo: owner/repo-a
+   PR URL: https://github.com/owner/repo-a/pull/42
    Author: @alice
    Branch: feature/auth-refactor → main
    Size: +324 / -89 (12 files)
@@ -91,6 +117,158 @@ Present a summary to the user:
    - routes/protected.rs: Updated guards to use new auth extractor
    - tests/auth_tests.rs: New test suite for JWT flow
 ```
+
+### Phase 2b — Detect Self-Review vs. Peer Review
+
+After fetching the PR author, determine whether this is the **user's own PR** or
+**someone else's**:
+
+```bash
+# Get the authenticated user's login
+gh api user --jq '.login'
+```
+
+Compare it to `pr.author.login`. Then branch into the appropriate review mode.
+
+#### Self-Review mode (`author.login == current_user`)
+
+- The user just pushed this PR and wants a final sanity check before asking others.
+- Focus on: completeness, CI status, test coverage, documentation, no embarrassing
+  typos or debug logs left behind.
+- There are typically **no existing reviews** from humans (maybe bot comments).
+- Be constructive but direct — treat it like a pre-flight checklist.
+- You may still deliver findings as a structured text summary; the user can fix
+  issues locally and force-push.
+
+#### Peer-Review mode (`author.login != current_user`)
+
+- You are reviewing someone else's work.
+- **Mandatory:** fetch all existing reviews and inline comments (see commands above).
+- Before surfacing any finding, check whether it was already flagged by another
+  reviewer (e.g. @asmarques, @gemini-code-assist).
+- **If already flagged:** skip it or briefly note "already raised by @X" — do NOT
+  re-post the same issue.
+- **If new:** surface it with the same severity and actionable format.
+- Build upon existing review threads rather than rehashing them. If you agree
+  with an existing reviewer and have additional context, add a reply to their
+  thread instead of opening a duplicate.
+- The final deliverable can be either:
+  - A top-level review comment (approve / request changes / comment)
+  - Individual **inline comments** posted via the API (see Phase 5b)
+  - Both
+
+### Phase 2c — Architecture Review ("Does this design make sense?")
+
+Step back before reading individual lines. Assess whether the high-level design
+is sound — especially for new features, API additions, or cross-subsystem
+refactorings. This is about **subsystem-level decisions**, not code-level patterns
+(those come in Phase 3).
+
+**Questions to answer:**
+
+1. **Feature placement — does this belong here?**
+   - Is the new module/service in the right layer?
+   - Does it respect existing boundaries (e.g. repo vs. service vs. handler)?
+
+2. **Data flow — is the path from input to output sound?**
+   - Any unnecessary hops or round-trips?
+   - Is caching applied consistently?
+
+3. **Abstraction level — too much or too little?**
+   - Premature abstraction (indirection with no benefit)?
+   - Logic leaked into the wrong layer (e.g. DB queries in a route handler)?
+
+4. **Coupling — are boundaries respected?**
+   - New circular dependencies?
+   - Internal details leaking across modules?
+   - Can the new code be tested in isolation?
+
+5. **API design (if applicable)**
+   - Paths, parameters, and responses consistent with existing conventions?
+   - Versioning strategy?
+   - Error shapes uniform?
+
+6. **Operational concerns**
+   - Expected load — will it scale?
+   - New failure modes (external dependency going down)?
+   - Observability (logs, metrics) adequate?
+
+7. **Migration / backward compatibility**
+   - Breaking changes for existing clients?
+   - Rollout strategy?
+
+> **If the architecture is flawed, stop here.** Flag the design concern and
+> suggest an alternative. Don't review variable names when the module shouldn't
+> exist in its current form.
+>
+> **If the architecture is sound, proceed** to Phase 2d (local checkout) or
+> Phase 3 (detailed code review).
+
+### Phase 2d — Deep Dive: Local Checkout & Test Execution
+
+The diff and GitHub file browser are often insufficient for a thorough review.
+If you need to understand context (surrounding files, imports, test setup,
+dependency relationships), **ask the user for permission to clone the repo and
+check out the PR branch locally.**
+
+**When to ask for local checkout:**
+- The PR touches files you're unfamiliar with and you need to see the broader
+  module structure.
+- You suspect a bug that would be confirmed by running the test suite.
+- The PR introduces a new dependency or build step you want to validate.
+- You need to trace types/imports across multiple packages in a monorepo.
+- The diff is large (>500 lines) and context is hard to follow in the browser.
+
+**How to check out the PR branch:**
+
+```bash
+# Clone the repo (or navigate to it if already in /workspace)
+gh repo clone <owner/repo> /tmp/pr-review-<number>
+cd /tmp/pr-review-<number>
+
+# Fetch and check out the PR branch
+gh pr checkout <NUMBER>
+
+# Or manually:
+git fetch origin pull/<NUMBER>/head:pr-<NUMBER>
+git checkout pr-<NUMBER>
+```
+
+**What to do once checked out:**
+
+1. **Explore context** — Read surrounding files the PR imports from or depends
+   on (`rg`, `find`, `read`). Understand the test helpers, service layer, and
+   module boundaries.
+
+2. **Run relevant tests** — Execute only the test suites touching changed code:
+   ```bash
+   cargo test                    # Rust
+   pnpm test --filter=api        # JS/TS monorepo
+   pytest tests/catalog/         # Python
+   go test ./...                 # Go
+   make test                     # Makefile-driven
+   ```
+   Report pass/fail and whether new behavior is actually exercised.
+
+3. **Run lint / type check** — Catch errors CI might miss:
+   ```bash
+   cargo clippy; pnpm lint; mypy .; golangci-lint run
+   ```
+
+4. **Check for side effects** — After tests, run `git status`. Generated files
+   (lockfiles, SDKs) that changed indicate missing regenerated artifacts in the PR.
+
+5. **Clean up** — Remove the temp clone when done:
+   ```bash
+   rm -rf /tmp/pr-review-<number>
+   ```
+
+**Always ask the user first:** "This PR touches code I'm not deeply familiar
+with. Can I check out the branch locally and run the tests to give you a more
+thorough review?"
+
+If the user says yes, proceed. If no, do your best with the diff and GitHub
+file browser.
 
 ### Phase 3 — Structured Review
 
@@ -130,6 +308,10 @@ Perform the review systematically. Use these lenses:
 - No dead code or TODOs without tracking issues
 - Consistent style with the rest of the codebase
 
+**Peer-Review de-duplication rule:** Before writing up a finding, scan the
+existing review comments (from Phase 2b). If the same file/line/issue was already
+flagged, skip it. Only present genuinely new findings to the user.
+
 ### Phase 4 — Deliver the Review
 
 Organize findings into a clear review comment.
@@ -165,43 +347,95 @@ The issue description and why it matters.
 2. **List findings** grouped by severity (Critical → Suggestion)
 3. **Highlight positives** — call out good patterns, clever solutions, clean tests
 
+**Self-Review variation:** Frame findings as a pre-flight checklist:
+- "Before requesting review from the team, consider fixing..."
+- "CI is green — nice. One thing to double-check..."
+
 ### Phase 5 — Submit the Review
 
 Give the user options for how to submit:
 
 ```bash
 # Approve with comments
-gh pr review <NUMBER> --approve --body "<review body>"
+gh pr review <NUMBER> --repo <owner/repo> --approve --body "<review body>"
 
 # Request changes
-gh pr review <NUMBER> --request-changes --body "<review body>"
+gh pr review <NUMBER> --repo <owner/repo> --request-changes --body "<review body>"
 
 # Comment only (no explicit approve/reject)
-gh pr review <NUMBER> --comment --body "<review body>"
-```
-
-For **inline comments** on specific lines:
-
-```bash
-# Use the API for line-specific comments
-gh api repos/{owner}/{repo}/pulls/{number}/comments \
-  -f body="Comment text" \
-  -f path="src/file.rs" \
-  -f line=42 \
-  -f side="RIGHT"
-```
-
-For inline comments on the **original** (left) side of the diff, use:
-```bash
-gh api repos/{owner}/{repo}/pulls/{number}/comments \
-  -f body="Comment text" \
-  -f path="src/file.rs" \
-  -f line=42 \
-  -f side="LEFT"
+gh pr review <NUMBER> --repo <owner/repo> --comment --body "<review body>"
 ```
 
 **Always confirm with the user before submitting.** Show the full review text and
 let them edit or approve. Never submit without explicit confirmation.
+
+### Phase 5b — Inline Comments via API (Peer-Review only, Human-in-the-Loop)
+
+When reviewing someone else's PR, you can post **individual inline comments**
+directly on specific lines using the GitHub API. This is useful for precise,
+actionable feedback that appears in the diff view.
+
+**Step 1 — Draft comments.** For each new finding (not already flagged by others),
+draft:
+- `path`: file path (e.g. `apps/api/src/modules/catalog/catalog.module.ts`)
+- `line`: line number on the RIGHT side of the diff (the PR's version)
+- `side`: always `"RIGHT"` for comments on the PR's changes
+- `body`: the comment text (include severity emoji and suggestion if applicable)
+- `commit_id`: the latest commit SHA on the PR branch (needed for API)
+
+Fetch the latest commit SHA:
+```bash
+gh pr view <NUMBER> --repo <owner/repo> --json headRefOid --jq '.headRefOid'
+```
+
+**Step 2 — Present to user for approval.** Show each draft comment like this:
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Draft inline comment 1 of 3
+
+File: apps/api/src/modules/catalog/catalog.module.ts:17-21
+Side: RIGHT
+
+🟡 Major — `mapDataset` crashes if index document lacks `creator`
+
+The `creator` field is destructured unconditionally. If any indexed document
+has a missing or null `creator`, `creator.id` throws at runtime.
+
+```suggestion
+creator: creator ? {
+  id: creator.id,
+  username: creator.username,
+  displayName: creator.displayName,
+} : null,
+```
+
+Post this comment? [yes / skip / edit]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+Wait for the user's explicit response (`yes`, `skip`, or an edited version).
+Do NOT batch-post; go one by one so the user can filter.
+
+**Step 3 — Post approved comments.** For each approved comment:
+
+```bash
+gh api repos/{owner}/{repo}/pulls/{number}/comments \
+  -f body="<comment text>" \
+  -f path="<file>" \
+  -f line=<line> \
+  -f side="RIGHT" \
+  -f commit_id="<headRefOid>"
+```
+
+**Important constraints:**
+- Comments can only be posted on lines that appear in the diff (changed or context).
+- If a line is outside the diff hunk, the API will reject it.
+- For multi-line comments, also include `start_line` and `start_side`.
+- Always use the latest `commit_id` (head of the PR branch), not the base.
+
+After all inline comments are handled, optionally post a top-level review
+(Phase 5) to summarize the overall verdict.
 
 ### Phase 6 — Loop
 
@@ -218,31 +452,39 @@ If yes, re-run Phase 1 (the reviewed PR should now be gone from the list).
 ## Quick Commands Reference
 
 ```bash
-# Dashboard — all pending reviews
-gh pr list --search "review-requested:@me state:open" --json number,title,repository,author,updatedAt,url
-
-# Cross-repo search
-gh search prs --review-requested=@me --state open
+# Dashboard — all pending reviews (cross-repo)
+gh search prs --review-requested=@me --state open --json repository,number,title,url,author,updatedAt
 
 # PR details + diff
-gh pr view <NUMBER> --json title,body,author,additions,deletions,changedFiles,labels
-gh pr diff <NUMBER>
+gh pr view <NUMBER> --repo <owner/repo> --json title,body,author,additions,deletions,changedFiles,labels,url
+gh pr diff <NUMBER> --repo <owner/repo>
 
-# Existing reviews and inline comments
+# Current user login (for self-review detection)
+gh api user --jq '.login'
+
+# Existing reviews and inline comments (peer-review dedup)
 gh api repos/{owner}/{repo}/pulls/{number}/reviews
 gh api repos/{owner}/{repo}/pulls/{number}/comments
 
 # CI checks
-gh pr checks <NUMBER>
+gh pr checks <NUMBER> --repo <owner/repo>
 
-# Submit review
-gh pr review <NUMBER> --approve --body "<body>"
-gh pr review <NUMBER> --request-changes --body "<body>"
-gh pr review <NUMBER> --comment --body "<body>"
+# Latest commit SHA (for inline comment posting)
+gh pr view <NUMBER> --repo <owner/repo> --json headRefOid --jq '.headRefOid'
 
-# Inline comment on specific line
+# Local checkout for deep validation
+gh repo clone <owner/repo> /tmp/pr-review-<number>
+cd /tmp/pr-review-<number> && gh pr checkout <NUMBER>
+
+# Submit top-level review
+gh pr review <NUMBER> --repo <owner/repo> --approve --body "<body>"
+gh pr review <NUMBER> --repo <owner/repo> --request-changes --body "<body>"
+gh pr review <NUMBER> --repo <owner/repo> --comment --body "<body>"
+
+# Inline comment on specific line (peer-review, HITL approved only)
 gh api repos/{owner}/{repo}/pulls/{number}/comments \
-  -f body="<comment>" -f path="<file>" -f line=<line> -f side="RIGHT"
+  -f body="<comment>" -f path="<file>" -f line=<line> \
+  -f side="RIGHT" -f commit_id="<sha>"
 ```
 
 ## Tips
@@ -257,3 +499,7 @@ gh api repos/{owner}/{repo}/pulls/{number}/comments \
   want to review (drafts may not be ready for full review).
 - **Auto-merge**: if CI passes and you approved, remind the user they can enable
   auto-merge: `gh pr merge <NUMBER> --auto`
+- **Peer-review etiquette:** When existing reviewers (e.g. @asmarques) have
+  already flagged issues, do not re-post the same comment. Acknowledge their
+  review, add only net-new findings, and feel free to reply to their threads
+  if you have additional context.

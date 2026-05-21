@@ -103,6 +103,14 @@ RUN apt-get update && apt-get install -y \
     procps \
     sudo \
     jq \
+    gnupg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install GitHub CLI (gh) from the official apt repository.
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+    && apt-get update && apt-get install -y -qq gh \
     && rm -rf /var/lib/apt/lists/*
 
 # Give the existing 'node' user passwordless sudo so it can install
@@ -142,11 +150,19 @@ RUN apt-get update && apt-get install -y \
     procps \
     sudo \
     jq \
+    gnupg \
     python3 \
     python3-pip \
     python3-venv \
     ripgrep \
     ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install GitHub CLI (gh) from the official apt repository.
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+    && apt-get update && apt-get install -y -qq gh \
     && rm -rf /var/lib/apt/lists/*
 
 # Give the existing 'node' user passwordless sudo so it can install
@@ -403,6 +419,14 @@ impl Sandbox for PodmanSandbox {
                 args.push("-e".to_string());
                 args.push(format!("ANTHROPIC_BASE_URL={}", base_url));
             }
+        }
+
+        // Forward GitHub token from host so gh CLI is authenticated inside
+        // the container. Set GITHUB_TOKEN in your host environment, e.g.
+        //   export GITHUB_TOKEN=$(gh auth token)
+        if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+            args.push("-e".to_string());
+            args.push(format!("GITHUB_TOKEN={}", token));
         }
 
         let cwd = container_working_dir(&repo_abs);
