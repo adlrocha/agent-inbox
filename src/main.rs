@@ -761,7 +761,7 @@ fn main() -> Result<()> {
                         Ok(id) => {
                             // Check for worktree *before* killing (task record is deleted after).
                             let wt_path = if remove_worktree_flag {
-                                db.get_worktree_path(&id)?
+                                db.get_task_by_id(&id)?.and_then(|t| t.worktree_path)
                             } else {
                                 None
                             };
@@ -1307,20 +1307,17 @@ fn find_pi_session_for_cwd(container_dir: &str) -> Option<std::path::PathBuf> {
 
 // ── Hermes command handlers ──────────────────────────────────────────────────
 
-/// Sentinel repo_path for the hermes sandbox in container_state.
+/// Sentinel repo_path for the hermes sandbox.
 const HERMES_REPO_PATH: &str = "__hermes__";
 
 /// Find the running hermes sandbox task, if any.
 fn find_hermes_sandbox(db: &Database) -> Result<Option<Task>> {
-    let states = db.list_container_states()?;
     let sandbox = PodmanSandbox::new();
-    for (tid, _, _, _, _) in &states {
-        if let Some(task) = db.get_task_by_id(tid)? {
-            if task.agent_type == AgentType::Hermes {
-                if let Some(ref cid) = task.container_id {
-                    if let Ok(crate::sandbox::ContainerStatus::Running) = sandbox.status(cid) {
-                        return Ok(Some(task));
-                    }
+    for task in db.list_sandbox_tasks()? {
+        if task.agent_type == AgentType::Hermes {
+            if let Some(ref cid) = task.container_id {
+                if let Ok(crate::sandbox::ContainerStatus::Running) = sandbox.status(cid) {
+                    return Ok(Some(task));
                 }
             }
         }
@@ -1516,14 +1513,10 @@ fn cmd_hermes_spawn_internal(db: &Database) -> Result<String> {
                 );
                 task.sandbox_type = SandboxType::Podman;
                 task.container_id = Some(info.id.clone());
+                task.container_name = Some(info.name.clone());
+                task.repo_path = Some(HERMES_REPO_PATH.to_string());
                 task.set_exited(None);
                 db.insert_task(&task)?;
-                db.upsert_container_state_with_worktree(
-                    &task_id,
-                    &info.name,
-                    HERMES_REPO_PATH,
-                    None,
-                )?;
 
                 anyhow::bail!(
                     "Hermes container crashed immediately. Gateway logs:\n{}\n\
@@ -1543,6 +1536,8 @@ fn cmd_hermes_spawn_internal(db: &Database) -> Result<String> {
     );
     task.sandbox_type = SandboxType::Podman;
     task.container_id = Some(info.id.clone());
+    task.container_name = Some(info.name.clone());
+    task.repo_path = Some(HERMES_REPO_PATH.to_string());
     task.sandbox_config = Some(sb_config);
     task.context = Some(TaskContext {
         url: None,
@@ -1552,7 +1547,6 @@ fn cmd_hermes_spawn_internal(db: &Database) -> Result<String> {
         extra: HashMap::new(),
     });
     db.insert_task(&task)?;
-    db.upsert_container_state_with_worktree(&task_id, &info.name, HERMES_REPO_PATH, None)?;
 
     let short_id = &task_id[..task_id.len().min(8)];
     println!("\nHermes sandbox started:");
@@ -1790,7 +1784,6 @@ fn cmd_hermes_kill_internal(db: &Database) -> Result<()> {
         let mut task = task;
         task.set_exited(None);
         db.update_task(&task)?;
-        db.delete_container_state(&task.task_id)?;
     }
     Ok(())
 }
@@ -1807,7 +1800,6 @@ fn cmd_hermes_kill(db: &Database) -> Result<()> {
             let mut task = task;
             task.set_exited(None);
             db.update_task(&task)?;
-            db.delete_container_state(&task.task_id)?;
             println!("Killed Hermes sandbox (task {})", short_id);
             println!("  Mounted repos are preserved. Run `nibble hermes init` to restart.");
         }
@@ -1846,72 +1838,57 @@ pub(crate) fn cmd_sandbox_spawn(
         .canonicalize()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| repo_path.clone());
-    if let Some((existing_task_id, _)) =
-        db.get_container_state_by_repo_path(&abs_repo_path_early)?
-    {
-        if let Some(task) = db.get_task_by_id(&existing_task_id)? {
-            if let Some(ref cid) = task.container_id {
-                if let Ok(crate::sandbox::ContainerStatus::Running) = sandbox.status(cid) {
-                    eprintln!(
-                        "⚠️  A sandbox for '{}' already exists (task {}).",
-                        abs_repo_path_early,
-                        &existing_task_id[..existing_task_id.len().min(8)]
-                    );
-                    eprintln!(
-                        "   Attaching to the existing sandbox instead of spawning a new one."
-                    );
-                    eprintln!();
-                    if no_attach {
-                        eprintln!("Attach with:");
-                        eprintln!("  nibble sandbox attach {}", abs_repo_path_early);
-                    } else {
-                        cmd_sandbox_attach(
-                            db,
-                            existing_task_id.clone(),
-                            fresh,
-                            false,
-                            hermes,
-                            pi,
-                            None,
-                        )?;
-                    }
-                    return Ok(existing_task_id);
+    if let Some(task) = db.get_task_by_repo_path(&abs_repo_path_early)? {
+        if let Some(ref cid) = task.container_id {
+            if let Ok(crate::sandbox::ContainerStatus::Running) = sandbox.status(cid) {
+                let existing_task_id = &task.task_id;
+                eprintln!(
+                    "⚠️  A sandbox for '{}' already exists (task {}).",
+                    abs_repo_path_early,
+                    &existing_task_id[..existing_task_id.len().min(8)]
+                );
+                eprintln!("   Attaching to the existing sandbox instead of spawning a new one.");
+                eprintln!();
+                if no_attach {
+                    eprintln!("Attach with:");
+                    eprintln!("  nibble sandbox attach {}", abs_repo_path_early);
+                } else {
+                    cmd_sandbox_attach(
+                        db,
+                        existing_task_id.clone(),
+                        fresh,
+                        false,
+                        hermes,
+                        pi,
+                        None,
+                    )?;
                 }
+                return Ok(existing_task_id.clone());
             }
         }
     }
 
     // INV-5: Only one Hermes sandbox at a time. Check for existing running Hermes sandboxes.
     if hermes {
-        let container_states = db.list_container_states()?;
-        for (tid, _name, _path, _wt, _ts) in &container_states {
-            if let Some(task) = db.get_task_by_id(tid)? {
-                if task.agent_type == AgentType::Hermes {
-                    if let Some(ref cid) = task.container_id {
-                        if let Ok(crate::sandbox::ContainerStatus::Running) = sandbox.status(cid) {
-                            eprintln!(
-                                "⚠️  A Hermes sandbox already exists (task {}).",
-                                &tid[..tid.len().min(8)]
-                            );
-                            eprintln!("   Only one Hermes sandbox is supported at a time.");
-                            eprintln!("   Attaching to the existing sandbox instead.");
-                            eprintln!();
-                            if no_attach {
-                                eprintln!("Attach with:");
-                                eprintln!("  nibble sandbox attach {}", tid);
-                            } else {
-                                cmd_sandbox_attach(
-                                    db,
-                                    tid.clone(),
-                                    fresh,
-                                    false,
-                                    hermes,
-                                    pi,
-                                    None,
-                                )?;
-                            }
-                            return Ok(tid.clone());
+        for task in db.list_sandbox_tasks()? {
+            if task.agent_type == AgentType::Hermes {
+                if let Some(ref cid) = task.container_id {
+                    if let Ok(crate::sandbox::ContainerStatus::Running) = sandbox.status(cid) {
+                        let tid = &task.task_id;
+                        eprintln!(
+                            "⚠️  A Hermes sandbox already exists (task {}).",
+                            &tid[..tid.len().min(8)]
+                        );
+                        eprintln!("   Only one Hermes sandbox is supported at a time.");
+                        eprintln!("   Attaching to the existing sandbox instead.");
+                        eprintln!();
+                        if no_attach {
+                            eprintln!("Attach with:");
+                            eprintln!("  nibble sandbox attach {}", tid);
+                        } else {
+                            cmd_sandbox_attach(db, tid.clone(), fresh, false, hermes, pi, None)?;
                         }
+                        return Ok(tid.clone());
                     }
                 }
             }
@@ -2203,6 +2180,8 @@ pub(crate) fn cmd_sandbox_spawn(
     };
 
     task.container_id = Some(info.id.clone());
+    task.container_name = Some(info.name.clone());
+    task.repo_path = Some(abs_repo_path.clone());
     task.sandbox_config = Some(config);
     task.context = Some(TaskContext {
         url: None,
@@ -2211,23 +2190,16 @@ pub(crate) fn cmd_sandbox_spawn(
         claude_session_id: None,
         extra: HashMap::new(),
     });
-    db.insert_task(&task)?;
 
     // Detect if this repo is a git worktree (has a `.git` file rather than a directory).
     // If so, record the worktree path so `kill --worktree` knows what to clean up.
     let worktree_marker = repo.join(".git");
     let is_worktree = worktree_marker.is_file();
-    let worktree_path_opt = if is_worktree {
-        Some(abs_repo_path.as_str())
-    } else {
-        None
-    };
-    db.upsert_container_state_with_worktree(
-        &task_id,
-        &info.name,
-        &abs_repo_path,
-        worktree_path_opt,
-    )?;
+    if is_worktree {
+        task.worktree_path = Some(abs_repo_path.clone());
+    }
+
+    db.insert_task(&task)?;
 
     let short_id = &task_id[..task_id.len().min(8)];
     println!("\nSandbox started:");
@@ -2634,14 +2606,15 @@ fn cmd_cron_run(db: &Database, id: i64) -> Result<()> {
 
 /// Find a healthy sandbox for the given repo path. Returns None if no healthy container exists.
 fn find_healthy_sandbox_for_repo(db: &Database, repo_path: &str) -> Result<Option<models::Task>> {
-    let Some((task_id, container_name)) = db.get_container_state_by_repo_path(repo_path)? else {
-        return Ok(None);
-    };
-    let Some(task) = db.get_task_by_id(&task_id)? else {
+    let Some(task) = db.get_task_by_repo_path(repo_path)? else {
         return Ok(None);
     };
     let sandbox = PodmanSandbox::new();
-    match sandbox.health_check(&container_name) {
+    let container_name = task
+        .container_name
+        .as_deref()
+        .unwrap_or_else(|| task.container_id.as_deref().unwrap_or(""));
+    match sandbox.health_check(container_name) {
         SandboxHealth::Healthy => Ok(Some(task)),
         _ => Ok(None),
     }
@@ -2649,9 +2622,9 @@ fn find_healthy_sandbox_for_repo(db: &Database, repo_path: &str) -> Result<Optio
 
 /// List all tracked sandboxes, auto-cleaning gone entries.
 fn cmd_sandbox_list(db: &Database) -> Result<()> {
-    let states = db.list_container_states()?;
+    let tasks = db.list_sandbox_tasks()?;
 
-    if states.is_empty() {
+    if tasks.is_empty() {
         println!("No sandbox containers found.");
         println!("Start one with:  nibble sandbox spawn <repo_path>");
         return Ok(());
@@ -2666,7 +2639,11 @@ fn cmd_sandbox_list(db: &Database) -> Result<()> {
     println!("{}", "─".repeat(82));
 
     let mut any_gone = false;
-    for (task_id, container_name, repo_path, worktree_path, _created) in &states {
+    for task in &tasks {
+        let container_name = task
+            .container_name
+            .as_deref()
+            .unwrap_or_else(|| task.container_id.as_deref().unwrap_or(""));
         let health = sandbox.health_check(container_name);
 
         let status = match health {
@@ -2674,9 +2651,11 @@ fn cmd_sandbox_list(db: &Database) -> Result<()> {
             SandboxHealth::Degraded => "degraded",
             SandboxHealth::Stopped => "stopped",
             SandboxHealth::Dead => {
-                // Container is gone — prune state silently
+                // Container is gone — prune task state silently
                 any_gone = true;
-                let _ = db.delete_container_state(task_id);
+                let mut t = task.clone();
+                t.set_exited(None);
+                let _ = db.update_task(&t);
                 continue;
             }
         };
@@ -2704,18 +2683,15 @@ fn cmd_sandbox_list(db: &Database) -> Result<()> {
             })
             .unwrap_or_else(|| container_name.chars().take(17).collect());
 
-        let short_id = &task_id[..task_id.len().min(8)];
+        let short_id = &task.task_id[..task.task_id.len().min(8)];
+        let repo_path = task.repo_path.as_deref().unwrap_or("?");
 
         // For worktree sandboxes, derive and display the branch name from the path suffix.
-        let display_path = if worktree_path.is_some() {
-            // The worktree path IS the repo_path for worktree sandboxes; extract branch from suffix.
+        let display_path = if task.worktree_path.is_some() {
             let branch_hint = std::path::Path::new(repo_path)
                 .file_name()
                 .and_then(|n| n.to_str())
-                .and_then(|name| {
-                    // name is like "myrepo--feature-auth", extract part after first "--"
-                    name.find("--").map(|i| &name[i + 2..])
-                })
+                .and_then(|name| name.find("--").map(|i| &name[i + 2..]))
                 .unwrap_or("");
             if branch_hint.is_empty() {
                 format!("{} [worktree]", repo_path)
@@ -2723,7 +2699,7 @@ fn cmd_sandbox_list(db: &Database) -> Result<()> {
                 format!("{} [branch: {}]", repo_path, branch_hint)
             }
         } else {
-            repo_path.clone()
+            repo_path.to_string()
         };
 
         println!(
@@ -2745,7 +2721,7 @@ fn cmd_sandbox_list(db: &Database) -> Result<()> {
 /// - A task ID or prefix (UUID hex string)
 /// - A repo path (starts with `.`, `/`, `~`, contains a path separator, or exists as a directory)
 ///
-/// For repo paths the canonical absolute path is looked up in the container_state table,
+/// For repo paths the canonical absolute path is looked up in the tasks table
 /// returning the most recently spawned sandbox for that repo.
 
 /// Resolve a user-supplied path to its canonical absolute form.
@@ -2792,11 +2768,11 @@ fn resolve_sandbox_id(db: &Database, input: &str) -> Result<String> {
         let path_str = canonical.to_string_lossy();
 
         let result = db
-            .get_container_state_by_repo_path(&path_str)
+            .get_task_by_repo_path(&path_str)
             .with_context(|| format!("DB error looking up repo path: {}", path_str))?;
 
-        if let Some((task_id, _)) = result {
-            return Ok(task_id);
+        if let Some(task) = result {
+            return Ok(task.task_id);
         }
 
         anyhow::bail!(
@@ -2813,21 +2789,18 @@ fn resolve_sandbox_id(db: &Database, input: &str) -> Result<String> {
         return Ok(input.to_string());
     }
 
-    // Prefix match against container_states (more efficient than scanning all tasks).
-    let states = db.list_container_states()?;
-    let matches: Vec<_> = states
+    // Prefix match against sandbox tasks.
+    let tasks = db.list_sandbox_tasks()?;
+    let matches: Vec<_> = tasks
         .iter()
-        .filter(|(tid, _, _, _, _)| tid.starts_with(input))
+        .filter(|t| t.task_id.starts_with(input))
         .collect();
 
     match matches.len() {
         0 => anyhow::bail!("No sandbox found with ID or path: {}", input),
-        1 => Ok(matches[0].0.clone()),
+        1 => Ok(matches[0].task_id.clone()),
         _ => {
-            let ids: Vec<&str> = matches
-                .iter()
-                .map(|(tid, _, _, _, _)| tid.as_str())
-                .collect();
+            let ids: Vec<&str> = matches.iter().map(|t| t.task_id.as_str()).collect();
             anyhow::bail!(
                 "Ambiguous prefix '{}' matches multiple sandboxes:\n  {}",
                 input,
@@ -3327,7 +3300,6 @@ fn cmd_sandbox_kill(db: &Database, task_id: String) -> Result<()> {
     PodmanSandbox::new().kill(&container_id)?;
     task.set_exited(None);
     db.update_task(&task)?;
-    db.delete_container_state(&task_id)?;
 
     println!("Killed sandbox {} (task {})", container_id, task_id);
 
@@ -3504,22 +3476,24 @@ fn cmd_sandbox_gc(db: &Database, task_id: String, all: bool) -> Result<()> {
 /// Kill all running sandbox containers.
 fn cmd_sandbox_kill_all(db: &Database) -> Result<()> {
     let sandbox = PodmanSandbox::new();
-    let states = db.list_container_states()?;
+    let tasks = db.list_sandbox_tasks()?;
 
-    if states.is_empty() {
+    if tasks.is_empty() {
         println!("No sandbox agents to kill.");
         return Ok(());
     }
 
     let mut killed = 0;
-    for (task_id, container_name, _, _, _) in &states {
+    for task in &tasks {
+        let container_name = task
+            .container_name
+            .as_deref()
+            .unwrap_or_else(|| task.container_id.as_deref().unwrap_or(""));
         match sandbox.kill(container_name) {
             Ok(()) => {
-                if let Ok(Some(mut task)) = db.get_task_by_id(task_id) {
-                    task.set_exited(None);
-                    let _ = db.update_task(&task);
-                }
-                let _ = db.delete_container_state(task_id);
+                let mut t = task.clone();
+                t.set_exited(None);
+                let _ = db.update_task(&t);
                 println!("Killed {}", container_name);
                 killed += 1;
             }
@@ -3539,9 +3513,9 @@ fn cmd_sandbox_resume(db: &Database, all: bool) -> Result<()> {
     }
 
     let sandbox = PodmanSandbox::new();
-    let states = db.list_container_states()?;
+    let tasks = db.list_sandbox_tasks()?;
 
-    if states.is_empty() {
+    if tasks.is_empty() {
         println!("No sandbox agents to resume.");
         return Ok(());
     }
@@ -3549,79 +3523,70 @@ fn cmd_sandbox_resume(db: &Database, all: bool) -> Result<()> {
     let mut resumed = 0;
     let mut stale = 0;
 
-    for (task_id, container_name, repo_path, _, _) in &states {
+    for task in &tasks {
+        let container_name = task
+            .container_name
+            .as_deref()
+            .unwrap_or_else(|| task.container_id.as_deref().unwrap_or(""));
+        let repo_path = task.repo_path.as_deref().unwrap_or("?");
         match sandbox.health_check(container_name) {
             SandboxHealth::Healthy => {
-                if let Ok(Some(mut task)) = db.get_task_by_id(task_id) {
-                    if task.status != TaskStatus::Running {
-                        task.set_running();
-                        let _ = db.update_task(&task);
-                    }
+                let mut t = task.clone();
+                if t.status != TaskStatus::Running {
+                    t.set_running();
+                    let _ = db.update_task(&t);
                 }
-                println!("  Healthy: {} ({})", container_name, task_id);
+                println!("  Healthy: {} ({})", container_name, task.task_id);
                 resumed += 1;
             }
             SandboxHealth::Degraded => {
-                // Container alive but Claude session gone — keep container, mark task exited.
-                if let Ok(Some(mut task)) = db.get_task_by_id(task_id) {
-                    task.set_exited(None);
-                    let _ = db.update_task(&task);
-                }
+                let mut t = task.clone();
+                t.set_exited(None);
+                let _ = db.update_task(&t);
                 println!(
                     "  Degraded: {} (container up, Claude session gone, repo: {})",
                     container_name, repo_path
                 );
                 stale += 1;
             }
-            SandboxHealth::Stopped => {
-                // Container stopped (e.g. host reboot) — try to restart it.
-                match sandbox.start(container_name) {
-                    Ok(()) => match sandbox.health_check(container_name) {
-                        SandboxHealth::Healthy => {
-                            if let Ok(Some(mut task)) = db.get_task_by_id(task_id) {
-                                if task.status != TaskStatus::Running {
-                                    task.set_running();
-                                    let _ = db.update_task(&task);
-                                }
-                            }
-                            println!("  Restarted: {} ({})", container_name, repo_path);
-                            resumed += 1;
+            SandboxHealth::Stopped => match sandbox.start(container_name) {
+                Ok(()) => match sandbox.health_check(container_name) {
+                    SandboxHealth::Healthy => {
+                        let mut t = task.clone();
+                        if t.status != TaskStatus::Running {
+                            t.set_running();
+                            let _ = db.update_task(&t);
                         }
-                        _ => {
-                            if let Ok(Some(mut task)) = db.get_task_by_id(task_id) {
-                                task.set_exited(None);
-                                let _ = db.update_task(&task);
-                            }
-                            let _ = db.delete_container_state(task_id);
-                            println!(
-                                "  Cleaned: {} (start failed health check, repo: {})",
-                                container_name, repo_path
-                            );
-                            stale += 1;
-                        }
-                    },
-                    Err(e) => {
-                        eprintln!("  Failed to restart {container_name}: {e:#}");
-                        if let Ok(Some(mut task)) = db.get_task_by_id(task_id) {
-                            task.set_exited(None);
-                            let _ = db.update_task(&task);
-                        }
-                        let _ = db.delete_container_state(task_id);
+                        println!("  Restarted: {} ({})", container_name, repo_path);
+                        resumed += 1;
+                    }
+                    _ => {
+                        let mut t = task.clone();
+                        t.set_exited(None);
+                        let _ = db.update_task(&t);
                         println!(
-                            "  Cleaned: {} (start error, repo: {})",
+                            "  Cleaned: {} (start failed health check, repo: {})",
                             container_name, repo_path
                         );
                         stale += 1;
                     }
+                },
+                Err(e) => {
+                    eprintln!("  Failed to restart {container_name}: {e:#}");
+                    let mut t = task.clone();
+                    t.set_exited(None);
+                    let _ = db.update_task(&t);
+                    println!(
+                        "  Cleaned: {} (start error, repo: {})",
+                        container_name, repo_path
+                    );
+                    stale += 1;
                 }
-            }
+            },
             SandboxHealth::Dead => {
-                // Container no longer exists — clean up DB state.
-                if let Ok(Some(mut task)) = db.get_task_by_id(task_id) {
-                    task.set_exited(None);
-                    let _ = db.update_task(&task);
-                }
-                let _ = db.delete_container_state(task_id);
+                let mut t = task.clone();
+                t.set_exited(None);
+                let _ = db.update_task(&t);
                 println!("  Cleaned: {} (gone, repo: {})", container_name, repo_path);
                 stale += 1;
             }
@@ -3641,27 +3606,30 @@ pub(crate) fn prune_stale_tasks(db: &Database) -> Result<usize> {
     let mut pruned = 0;
 
     // Sandbox tasks: health-check each container.
-    //    - Dead      → container crashed; clean up state.
-    //    - Degraded  → container running but exec fails; update DB only.
+    //    - Dead      → container crashed; mark task exited.
+    //    - Degraded  → container running but exec fails; mark task exited.
+    //    - Stopped   → try silent restart; if fails, mark task exited.
     //    - Healthy   → all good, leave it alone.
-    let states = db.list_container_states()?;
-    if !states.is_empty() {
+    let tasks = db.list_sandbox_tasks()?;
+    if !tasks.is_empty() {
         let sandbox = PodmanSandbox::new();
-        for (task_id, container_name, _repo_path, _, _) in &states {
+        for task in &tasks {
+            let container_name = task
+                .container_name
+                .as_deref()
+                .unwrap_or_else(|| task.container_id.as_deref().unwrap_or(""));
+            if container_name.is_empty() {
+                continue;
+            }
             match sandbox.health_check(container_name) {
                 SandboxHealth::Healthy => {}
                 SandboxHealth::Stopped => {
-                    // Container stopped (reboot) — try to restart silently.
                     eprintln!(
                         "[prune] Sandbox {} stopped → attempting restart",
                         container_name
                     );
                     let restarted = match sandbox.start(container_name) {
                         Ok(()) => {
-                            // Give the container a moment to fully start before
-                            // health-checking — avoids a false "failed" due to a
-                            // race between `podman start` and the container being
-                            // ready to accept `exec` commands.
                             std::thread::sleep(std::time::Duration::from_secs(2));
                             sandbox.health_check(container_name) == SandboxHealth::Healthy
                         }
@@ -3669,22 +3637,18 @@ pub(crate) fn prune_stale_tasks(db: &Database) -> Result<usize> {
                     };
                     if restarted {
                         eprintln!("[prune] Sandbox {} restarted successfully", container_name);
-                        if let Ok(Some(mut task)) = db.get_task_by_id(task_id) {
-                            if task.status != TaskStatus::Running {
-                                task.set_running();
-                                let _ = db.update_task(&task);
-                            }
+                        if task.status != TaskStatus::Running {
+                            let mut t = task.clone();
+                            t.set_running();
+                            let _ = db.update_task(&t);
                         }
                     } else {
-                        // Could not restart right now (e.g. podman socket not yet
-                        // ready after boot). Keep the container_state record so the
-                        // next prune cycle can try again. Only update task status.
-                        if let Ok(Some(mut task)) = db.get_task_by_id(task_id) {
-                            if task.status == TaskStatus::Running {
-                                task.set_exited(None);
-                                let _ = db.update_task(&task);
-                                pruned += 1;
-                            }
+                        // Only transition Running → Exited.
+                        if task.status == TaskStatus::Running {
+                            let mut t = task.clone();
+                            t.set_exited(None);
+                            let _ = db.update_task(&t);
+                            pruned += 1;
                         }
                         eprintln!(
                             "[prune] Sandbox {} could not be restarted — will retry next cycle",
@@ -3693,36 +3657,31 @@ pub(crate) fn prune_stale_tasks(db: &Database) -> Result<usize> {
                     }
                 }
                 SandboxHealth::Dead => {
-                    // Don't delete container_state — a "dead" verdict can be
-                    // caused by a transient Podman socket failure (especially
-                    // after a host reboot).  Keeping the row lets the next
-                    // prune cycle or /sandboxes command retry.
-                    if let Ok(Some(mut task)) = db.get_task_by_id(task_id) {
-                        task.set_exited(None);
-                        let _ = db.update_task(&task);
+                    // Only transition Running → Exited (idempotency guard).
+                    if task.status == TaskStatus::Running {
+                        let mut t = task.clone();
+                        t.set_exited(None);
+                        let _ = db.update_task(&t);
                         eprintln!(
-                            "[prune] Sandbox {} dead → exited task {} (keeping container_state)",
+                            "[prune] Sandbox {} dead → exited task {}",
                             container_name,
-                            &task_id[..8.min(task_id.len())]
+                            &task.task_id[..8.min(task.task_id.len())]
                         );
                         pruned += 1;
                     }
                 }
                 SandboxHealth::Degraded => {
-                    // Container alive but exec fails — update task status only.
-                    // Keep the container_state record so `nibble list` still shows
-                    // it and the user can investigate or kill it explicitly.
-                    if let Ok(Some(mut task)) = db.get_task_by_id(task_id) {
-                        if task.status == TaskStatus::Running {
-                            task.set_exited(None);
-                            let _ = db.update_task(&task);
-                            eprintln!(
-                                "[prune] Sandbox {} degraded → exited task {}",
-                                container_name,
-                                &task_id[..8.min(task_id.len())]
-                            );
-                            pruned += 1;
-                        }
+                    // Only transition Running → Exited.
+                    if task.status == TaskStatus::Running {
+                        let mut t = task.clone();
+                        t.set_exited(None);
+                        let _ = db.update_task(&t);
+                        eprintln!(
+                            "[prune] Sandbox {} degraded → exited task {}",
+                            container_name,
+                            &task.task_id[..8.min(task.task_id.len())]
+                        );
+                        pruned += 1;
                     }
                 }
             }

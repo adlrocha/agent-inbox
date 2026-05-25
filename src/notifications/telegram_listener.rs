@@ -389,16 +389,21 @@ fn handle_message(msg: &serde_json::Value, config: &TelegramConfig, db: &Databas
 
 fn handle_sandboxes_command(config: &TelegramConfig, db: &Database, _chat_id: i64) -> Result<()> {
     let sandbox = PodmanSandbox::new();
-    let states = db.list_container_states()?;
+    let tasks = db.list_sandbox_tasks()?;
 
-    eprintln!(
-        "[sandboxes] checking {} container state entries",
-        states.len()
-    );
+    eprintln!("[sandboxes] checking {} sandbox tasks", tasks.len());
 
     let mut running: Vec<(String, String)> = Vec::new();
     let mut restarted: Vec<String> = Vec::new();
-    for (task_id, container_name, repo_path, _, _created) in &states {
+    for task in &tasks {
+        let container_name = task
+            .container_name
+            .as_deref()
+            .unwrap_or_else(|| task.container_id.as_deref().unwrap_or(""));
+        if container_name.is_empty() {
+            continue;
+        }
+        let repo_path = task.repo_path.as_deref().unwrap_or("?");
         let health = sandbox.health_check(container_name);
         eprintln!("[sandboxes] container={container_name} health={health:?}");
         match health {
@@ -406,9 +411,9 @@ fn handle_sandboxes_command(config: &TelegramConfig, db: &Database, _chat_id: i6
                 let label = std::path::Path::new(repo_path)
                     .file_name()
                     .and_then(|n| n.to_str())
-                    .unwrap_or(repo_path.as_str())
+                    .unwrap_or(repo_path)
                     .to_string();
-                running.push((task_id.clone(), label));
+                running.push((task.task_id.clone(), label));
             }
             crate::sandbox::SandboxHealth::Stopped => {
                 // Auto-restart stopped containers so the user can interact.
@@ -419,15 +424,14 @@ fn handle_sandboxes_command(config: &TelegramConfig, db: &Database, _chat_id: i6
                         let label = std::path::Path::new(repo_path)
                             .file_name()
                             .and_then(|n| n.to_str())
-                            .unwrap_or(repo_path.as_str())
+                            .unwrap_or(repo_path)
                             .to_string();
-                        running.push((task_id.clone(), label.clone()));
+                        running.push((task.task_id.clone(), label.clone()));
                         restarted.push(label);
-                        if let Ok(Some(mut task)) = db.get_task_by_id(task_id) {
-                            if task.status != TaskStatus::Running {
-                                task.set_running();
-                                let _ = db.update_task(&task);
-                            }
+                        let mut t = task.clone();
+                        if t.status != TaskStatus::Running {
+                            t.set_running();
+                            let _ = db.update_task(&t);
                         }
                     }
                 }
@@ -1037,18 +1041,22 @@ fn find_or_spawn_for_cron(
 ) -> Result<crate::models::Task> {
     let sandbox = PodmanSandbox::new();
 
-    // Walk all containers for this repo_path (newest first) and return the first healthy one.
-    for (task_id, container_name) in db.get_all_containers_by_repo_path(repo_path)? {
-        let Some(task) = db.get_task_by_id(&task_id)? else {
+    // Walk all sandbox tasks for this repo_path (newest first) and return the first healthy one.
+    for task in db.get_tasks_by_repo_path(repo_path)? {
+        let container_name = task
+            .container_name
+            .as_deref()
+            .unwrap_or_else(|| task.container_id.as_deref().unwrap_or(""));
+        if container_name.is_empty() {
             continue;
-        };
-        match sandbox.health_check(&container_name) {
+        }
+        match sandbox.health_check(container_name) {
             SandboxHealth::Healthy => return Ok(task),
             SandboxHealth::Stopped => {
                 eprintln!("[cron] Container {container_name} stopped → restarting for cron");
-                match sandbox.start(&container_name) {
+                match sandbox.start(container_name) {
                     Ok(()) => {
-                        if sandbox.health_check(&container_name) == SandboxHealth::Healthy {
+                        if sandbox.health_check(container_name) == SandboxHealth::Healthy {
                             return Ok(task);
                         }
                         eprintln!("[cron] Container {container_name} not healthy after start, trying next");

@@ -209,6 +209,18 @@ pub struct Task {
     pub metadata: Option<HashMap<String, serde_json::Value>>,
     // Sandbox fields (new in schema v3)
     pub container_id: Option<String>,
+    /// Podman container name (e.g. "nibble-20260525-1234-abc123").
+    /// Distinct from `container_id` which stores the SHA.
+    #[serde(default)]
+    pub container_name: Option<String>,
+    /// Canonical absolute host path of the repo mounted into the sandbox.
+    /// For Hermes sandboxes this is the sentinel `"__hermes__"`.
+    /// Replaces the old `container_state.repo_path` column.
+    #[serde(default)]
+    pub repo_path: Option<String>,
+    /// Git worktree path (set when the sandbox was spawned from a worktree branch).
+    #[serde(default)]
+    pub worktree_path: Option<String>,
     #[serde(default)]
     pub sandbox_type: SandboxType,
     pub sandbox_config: Option<SandboxConfig>,
@@ -241,6 +253,9 @@ impl Task {
             metadata: None,
             // Sandbox fields default to None/none
             container_id: None,
+            container_name: None,
+            repo_path: None,
+            worktree_path: None,
             sandbox_type: SandboxType::None,
             sandbox_config: None,
         }

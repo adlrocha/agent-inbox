@@ -9,7 +9,7 @@ use crate::models::{
     AgentType, CronJob, SandboxConfig, SandboxType, Task, TaskContext, TaskStatus,
 };
 
-const SCHEMA_VERSION: i32 = 9;
+const SCHEMA_VERSION: i32 = 10;
 
 pub struct Database {
     conn: Connection,
@@ -84,6 +84,9 @@ impl Database {
                 context TEXT,
                 metadata TEXT,
                 container_id TEXT,
+                container_name TEXT,
+                repo_path TEXT,
+                worktree_path TEXT,
                 sandbox_type TEXT DEFAULT 'none',
                 sandbox_config TEXT
             );
@@ -93,6 +96,7 @@ impl Database {
             CREATE INDEX idx_pid ON tasks(pid);
             CREATE INDEX idx_completed_at ON tasks(completed_at);
             CREATE INDEX idx_container_id ON tasks(container_id);
+            CREATE INDEX idx_tasks_repo_path ON tasks(repo_path) WHERE repo_path IS NOT NULL;
 
             CREATE TABLE bot_messages (
                 message_id INTEGER PRIMARY KEY,
@@ -103,15 +107,6 @@ impl Database {
             CREATE TABLE kv_store (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
-            );
-
-            CREATE TABLE container_state (
-                task_id TEXT PRIMARY KEY,
-                container_name TEXT NOT NULL,
-                repo_path TEXT NOT NULL,
-                worktree_path TEXT,
-                created_at INTEGER NOT NULL,
-                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
             );
 
             CREATE TABLE cron_jobs (
@@ -298,6 +293,24 @@ impl Database {
             )?;
         }
 
+        if from_version < 10 {
+            // Fold container_state into tasks: add columns, copy data, drop old table.
+            self.conn.execute_batch(
+                "ALTER TABLE tasks ADD COLUMN container_name TEXT;
+                 ALTER TABLE tasks ADD COLUMN repo_path TEXT;
+                 ALTER TABLE tasks ADD COLUMN worktree_path TEXT;
+
+                 UPDATE tasks SET
+                     container_name = (SELECT cs.container_name FROM container_state cs WHERE cs.task_id = tasks.task_id),
+                     repo_path = (SELECT cs.repo_path FROM container_state cs WHERE cs.task_id = tasks.task_id),
+                     worktree_path = (SELECT cs.worktree_path FROM container_state cs WHERE cs.task_id = tasks.task_id);
+
+                 CREATE INDEX idx_tasks_repo_path ON tasks(repo_path) WHERE repo_path IS NOT NULL;
+
+                 DROP TABLE container_state;",
+            )?;
+        }
+
         self.conn.execute(
             "UPDATE schema_version SET version = ?1",
             params![SCHEMA_VERSION],
@@ -329,8 +342,9 @@ impl Database {
             "INSERT INTO tasks (
                 task_id, agent_type, title, status, created_at, updated_at,
                 completed_at, pid, ppid, monitor_pid, attention_reason,
-                exit_code, context, metadata, container_id, sandbox_type, sandbox_config
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                exit_code, context, metadata, container_id, container_name,
+                repo_path, worktree_path, sandbox_type, sandbox_config
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
             params![
                 task.task_id,
                 task.agent_type.as_str(),
@@ -347,6 +361,9 @@ impl Database {
                 context_json,
                 metadata_json,
                 task.container_id,
+                task.container_name,
+                task.repo_path,
+                task.worktree_path,
                 task.sandbox_type.as_str(),
                 sandbox_config_json,
             ],
@@ -379,8 +396,9 @@ impl Database {
                 agent_type = ?1, title = ?2, status = ?3, updated_at = ?4,
                 completed_at = ?5, pid = ?6, ppid = ?7, monitor_pid = ?8,
                 attention_reason = ?9, exit_code = ?10, context = ?11, metadata = ?12,
-                container_id = ?13, sandbox_type = ?14, sandbox_config = ?15
-            WHERE task_id = ?16",
+                container_id = ?13, container_name = ?14, repo_path = ?15,
+                worktree_path = ?16, sandbox_type = ?17, sandbox_config = ?18
+            WHERE task_id = ?19",
             params![
                 task.agent_type.as_str(),
                 task.title,
@@ -395,6 +413,9 @@ impl Database {
                 context_json,
                 metadata_json,
                 task.container_id,
+                task.container_name,
+                task.repo_path,
+                task.worktree_path,
                 task.sandbox_type.as_str(),
                 sandbox_config_json,
                 task.task_id,
@@ -408,7 +429,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, task_id, agent_type, title, status, created_at, updated_at,
                     completed_at, pid, ppid, monitor_pid, attention_reason,
-                    exit_code, context, metadata, container_id, sandbox_type, sandbox_config
+                    exit_code, context, metadata, container_id, container_name, repo_path, worktree_path, sandbox_type, sandbox_config
              FROM tasks WHERE task_id = ?1",
         )?;
 
@@ -424,7 +445,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, task_id, agent_type, title, status, created_at, updated_at,
                     completed_at, pid, ppid, monitor_pid, attention_reason,
-                    exit_code, context, metadata, container_id, sandbox_type, sandbox_config
+                    exit_code, context, metadata, container_id, container_name, repo_path, worktree_path, sandbox_type, sandbox_config
              FROM tasks WHERE task_id LIKE ?1 || '%'",
         )?;
 
@@ -444,7 +465,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, task_id, agent_type, title, status, created_at, updated_at,
                     completed_at, pid, ppid, monitor_pid, attention_reason,
-                    exit_code, context, metadata, container_id, sandbox_type, sandbox_config
+                    exit_code, context, metadata, container_id, container_name, repo_path, worktree_path, sandbox_type, sandbox_config
              FROM tasks
              ORDER BY updated_at DESC",
         )?;
@@ -526,7 +547,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, task_id, agent_type, title, status, created_at, updated_at,
                     completed_at, pid, ppid, monitor_pid, attention_reason,
-                    exit_code, context, metadata, container_id, sandbox_type, sandbox_config
+                    exit_code, context, metadata, container_id, container_name, repo_path, worktree_path, sandbox_type, sandbox_config
              FROM tasks WHERE container_id = ?1",
         )?;
 
@@ -537,124 +558,61 @@ impl Database {
         Ok(task)
     }
 
-    /// List all tasks with a specific sandbox type
-    #[allow(dead_code)]
-    /// Insert or update container state, optionally recording an associated git worktree path.
-    pub fn upsert_container_state_with_worktree(
-        &self,
-        task_id: &str,
-        container_name: &str,
-        repo_path: &str,
-        worktree_path: Option<&str>,
-    ) -> Result<()> {
-        let now = Utc::now().timestamp();
-        self.conn.execute(
-            "INSERT OR REPLACE INTO container_state (task_id, container_name, repo_path, worktree_path, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![task_id, container_name, repo_path, worktree_path, now],
+    /// List all tasks that have an associated sandbox (sandbox_type != 'none').
+    pub fn list_sandbox_tasks(&self) -> Result<Vec<Task>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, task_id, agent_type, title, status, created_at, updated_at,
+                    completed_at, pid, ppid, monitor_pid, attention_reason,
+                    exit_code, context, metadata, container_id, container_name,
+                    repo_path, worktree_path, sandbox_type, sandbox_config
+             FROM tasks
+             WHERE sandbox_type != 'none'
+             ORDER BY created_at DESC",
         )?;
-        Ok(())
+
+        let tasks = stmt
+            .query_map([], |row| self.row_to_task(row))?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(tasks)
     }
 
-    /// Get container state by task ID
-    #[allow(dead_code)]
-    pub fn get_container_state(&self, task_id: &str) -> Result<Option<(String, String, i64)>> {
+    /// Find the most recent sandbox task for a given repo path.
+    pub fn get_task_by_repo_path(&self, repo_path: &str) -> Result<Option<Task>> {
         let result = self
             .conn
             .query_row(
-                "SELECT container_name, repo_path, created_at FROM container_state WHERE task_id = ?1",
-                params![task_id],
-                |row| {
-                    let name: String = row.get(0)?;
-                    let path: String = row.get(1)?;
-                    let created: i64 = row.get(2)?;
-                    Ok((name, path, created))
-                },
-            )
-            .optional()?;
-        Ok(result)
-    }
-
-    /// Delete container state
-    pub fn delete_container_state(&self, task_id: &str) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM container_state WHERE task_id = ?1",
-            params![task_id],
-        )?;
-        Ok(())
-    }
-
-    /// Find the most recent container state for a given repo path.
-    /// Returns (task_id, container_name) if found.
-    pub fn get_container_state_by_repo_path(
-        &self,
-        repo_path: &str,
-    ) -> Result<Option<(String, String)>> {
-        let result = self
-            .conn
-            .query_row(
-                "SELECT task_id, container_name FROM container_state WHERE repo_path = ?1 ORDER BY created_at DESC LIMIT 1",
+                "SELECT id, task_id, agent_type, title, status, created_at, updated_at,
+                        completed_at, pid, ppid, monitor_pid, attention_reason,
+                        exit_code, context, metadata, container_id, container_name,
+                        repo_path, worktree_path, sandbox_type, sandbox_config
+                 FROM tasks
+                 WHERE repo_path = ?1 AND sandbox_type != 'none'
+                 ORDER BY created_at DESC LIMIT 1",
                 params![repo_path],
-                |row| {
-                    let task_id: String = row.get(0)?;
-                    let name: String = row.get(1)?;
-                    Ok((task_id, name))
-                },
+                |row| self.row_to_task(row),
             )
             .optional()?;
         Ok(result)
     }
 
-    /// Return all containers for a given repo path, newest first.
-    pub fn get_all_containers_by_repo_path(
-        &self,
-        repo_path: &str,
-    ) -> Result<Vec<(String, String)>> {
+    /// Return all sandbox tasks for a given repo path, newest first.
+    pub fn get_tasks_by_repo_path(&self, repo_path: &str) -> Result<Vec<Task>> {
         let mut stmt = self.conn.prepare(
-            "SELECT task_id, container_name FROM container_state WHERE repo_path = ?1 ORDER BY created_at DESC",
-        )?;
-        let rows = stmt
-            .query_map(params![repo_path], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
-    }
-
-    /// List all container states.
-    /// Returns (task_id, container_name, repo_path, worktree_path, created_at).
-    pub fn list_container_states(
-        &self,
-    ) -> Result<Vec<(String, String, String, Option<String>, i64)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT task_id, container_name, repo_path, worktree_path, created_at FROM container_state ORDER BY created_at DESC"
+            "SELECT id, task_id, agent_type, title, status, created_at, updated_at,
+                    completed_at, pid, ppid, monitor_pid, attention_reason,
+                    exit_code, context, metadata, container_id, container_name,
+                    repo_path, worktree_path, sandbox_type, sandbox_config
+             FROM tasks
+             WHERE repo_path = ?1 AND sandbox_type != 'none'
+             ORDER BY created_at DESC",
         )?;
 
-        let states = stmt
-            .query_map([], |row| {
-                let task_id: String = row.get(0)?;
-                let name: String = row.get(1)?;
-                let path: String = row.get(2)?;
-                let worktree: Option<String> = row.get(3)?;
-                let created: i64 = row.get(4)?;
-                Ok((task_id, name, path, worktree, created))
-            })?
+        let tasks = stmt
+            .query_map(params![repo_path], |row| self.row_to_task(row))?
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(states)
-    }
-
-    /// Get the worktree path for a task, if any.
-    pub fn get_worktree_path(&self, task_id: &str) -> Result<Option<String>> {
-        let result = self
-            .conn
-            .query_row(
-                "SELECT worktree_path FROM container_state WHERE task_id = ?1",
-                params![task_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        Ok(result)
+        Ok(tasks)
     }
 
     // Hermes repo mount methods
@@ -933,11 +891,14 @@ impl Database {
 
         // Sandbox fields (may be NULL for old records)
         let container_id: Option<String> = row.get(15)?;
-        let sandbox_type_str: Option<String> = row.get(16)?;
+        let container_name: Option<String> = row.get(16)?;
+        let repo_path: Option<String> = row.get(17)?;
+        let worktree_path: Option<String> = row.get(18)?;
+        let sandbox_type_str: Option<String> = row.get(19)?;
         let sandbox_type = sandbox_type_str
             .and_then(|s| SandboxType::from_str(&s).ok())
             .unwrap_or(SandboxType::None);
-        let sandbox_config_json: Option<String> = row.get(17)?;
+        let sandbox_config_json: Option<String> = row.get(20)?;
         let sandbox_config: Option<SandboxConfig> =
             sandbox_config_json.and_then(|s| serde_json::from_str(&s).ok());
 
@@ -961,6 +922,9 @@ impl Database {
             context,
             metadata,
             container_id,
+            container_name,
+            repo_path,
+            worktree_path,
             sandbox_type,
             sandbox_config,
         })
