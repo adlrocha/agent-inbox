@@ -92,6 +92,18 @@ pub enum Commands {
         #[command(subcommand)]
         action: ProxyAction,
     },
+
+    /// List and manage local LLM model files
+    Lm {
+        #[command(subcommand)]
+        action: LmAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum LmAction {
+    /// List all .gguf model files found in configured model directories
+    List,
 }
 
 #[derive(Subcommand)]

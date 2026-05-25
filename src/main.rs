@@ -4,6 +4,7 @@ mod cli;
 mod config;
 mod cron;
 mod db;
+mod lm;
 mod memory;
 mod models;
 mod notifications;
@@ -13,7 +14,7 @@ mod session;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use cli::{Cli, Commands, CronAction, HermesAction, ReportAction, SandboxAction};
+use cli::{Cli, Commands, CronAction, HermesAction, LmAction, ReportAction, SandboxAction};
 use db::Database;
 use models::{AgentType, SandboxConfig, SandboxType, Task, TaskContext, TaskStatus};
 use sandbox::podman::PodmanSandbox;
@@ -889,6 +890,16 @@ fn main() -> Result<()> {
             let _ = prune_stale_tasks(&db);
 
             notifications::telegram_listener::run(&db, &cfg.telegram)?;
+        }
+
+        Commands::Lm { action } => {
+            let cfg = config::load().unwrap_or_default();
+            match action {
+                LmAction::List => {
+                    let models = lm::list_models(&cfg.lm)?;
+                    lm::print_list(&models);
+                }
+            }
         }
     }
 

@@ -24,6 +24,9 @@ pub struct Config {
 
     #[serde(default)]
     pub memory: MemoryConfig,
+
+    #[serde(default)]
+    pub lm: LmConfig,
 }
 
 /// AI Factory pipeline configuration.
@@ -259,6 +262,40 @@ impl TelegramConfig {
     /// Returns true when the config is complete enough to use.
     pub fn is_configured(&self) -> bool {
         self.enabled && !self.bot_token.is_empty() && !self.chat_id.is_empty()
+    }
+}
+
+/// Local LLM model management configuration.
+///
+/// Controls where `nibble lm list` scans for model files and which systemd
+/// service unit is inspected to determine the currently active model.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LmConfig {
+    /// Directories scanned for .gguf model files.
+    /// Defaults to ~/workspace/llm-models.
+    #[serde(default = "default_lm_model_dirs")]
+    pub model_dirs: Vec<String>,
+
+    /// Path to the llama-server systemd unit file used to detect the active model.
+    #[serde(default = "default_lm_service_unit")]
+    pub service_unit: String,
+}
+
+fn default_lm_model_dirs() -> Vec<String> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    vec![format!("{}/workspace/llm-models", home)]
+}
+
+fn default_lm_service_unit() -> String {
+    "/etc/systemd/system/llama-server.service".to_string()
+}
+
+impl Default for LmConfig {
+    fn default() -> Self {
+        Self {
+            model_dirs: default_lm_model_dirs(),
+            service_unit: default_lm_service_unit(),
+        }
     }
 }
 

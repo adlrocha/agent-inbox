@@ -14,7 +14,10 @@
 set -e
 
 # ── Defaults (override via environment or edit below) ─────────────────────────
-LLAMA_MODEL="${LLAMA_MODEL:-/home/adlrocha/workspace/llm-models/Qwen3.6-27B-UD-Q5_K_XL.gguf}"
+# To switch models: change LLAMA_MODEL to any .gguf in ~/workspace/llm-models/
+# and set LLAMA_MTP=true if it's an MTP model (adds --spec-type draft-mtp flags).
+LLAMA_MODEL="${LLAMA_MODEL:-/home/adlrocha/workspace/llm-models/Qwen3.6-35B-A3B-Q8_0.gguf}"
+LLAMA_MTP="${LLAMA_MTP:-true}"   # set false for non-MTP models
 LLAMA_USER="${LLAMA_USER:-$(whoami)}"
 LLAMA_PORT="${LLAMA_PORT:-6969}"
 LLAMA_BIN="${LLAMA_BIN:-/usr/bin/llama-server}"
@@ -50,9 +53,21 @@ if [ ! -f "$LLAMA_MODEL" ]; then
     die "Model not found at $LLAMA_MODEL. Set LLAMA_MODEL to the correct path."
 fi
 
+# ── Build MTP flags ───────────────────────────────────────────────────────────
+# MTP (Multi-Token Prediction) models use speculative decoding built into the
+# single GGUF — no separate draft model needed. Gives ~1.5-2x faster inference.
+# -np 1 is required; parallel inference is not supported with MTP.
+MTP_FLAGS=""
+NP_FLAG="-np 4"
+if [ "$LLAMA_MTP" = "true" ]; then
+    MTP_FLAGS="--spec-type draft-mtp --spec-draft-n-max 2"
+    NP_FLAG="-np 1"
+fi
+
 # ── Create service ────────────────────────────────────────────────────────────
 echo -e "${BOLD}Installing llama-server service…${NC}"
 echo "  Model: $LLAMA_MODEL"
+echo "  MTP:   $LLAMA_MTP"
 echo "  User:  $LLAMA_USER"
 echo "  Port:  $LLAMA_PORT"
 
@@ -72,13 +87,15 @@ ExecStart=$LLAMA_BIN \
     --host 0.0.0.0 \
     --port $LLAMA_PORT \
     -ngl 99 \
-    -c 65536 \
-    -n 4096 \
+    -c 131072 \
+    -n 8192 \
     -fa on \
     -ctk q4_0 \
     -ctv q4_0 \
     -b 4096 \
     -ub 4096 \
+    $NP_FLAG \
+    $MTP_FLAGS \
     --temp 0.6 \
     --top-p 0.95 \
     --top-k 40 \

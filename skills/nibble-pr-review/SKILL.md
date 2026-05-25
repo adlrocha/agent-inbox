@@ -146,12 +146,22 @@ Compare it to `pr.author.login`. Then branch into the appropriate review mode.
 - **Mandatory:** fetch all existing reviews and inline comments (see commands above).
 - Before surfacing any finding, check whether it was already flagged by another
   reviewer (e.g. @asmarques, @gemini-code-assist).
-- **If already flagged:** skip it or briefly note "already raised by @X" — do NOT
-  re-post the same issue.
+- **If already flagged:** do NOT mention it again. Not even to say "already raised
+  by @X". Simply skip it. The user does not need a catalog of what they already
+  read.
 - **If new:** surface it with the same severity and actionable format.
 - Build upon existing review threads rather than rehashing them. If you agree
   with an existing reviewer and have additional context, add a reply to their
   thread instead of opening a duplicate.
+- **Dig-deeper heuristic:** if existing reviews already cover obvious bugs, style,
+  or naming issues, shift your focus to:
+  - Higher-level design gaps (see Phase 2c)
+  - Edge cases or error paths the existing reviewers missed
+  - Race conditions, concurrency, or state-management issues
+  - Missing tests for behavior that *is* implemented
+  - Subtle API contract violations or backward-compatibility breaks
+  - Performance or operational concerns (memory, latency, observability)
+  - Hidden coupling or future maintenance burdens
 - The final deliverable can be either:
   - A top-level review comment (approve / request changes / comment)
   - Individual **inline comments** posted via the API (see Phase 5b)
@@ -208,16 +218,26 @@ refactorings. This is about **subsystem-level decisions**, not code-level patter
 
 The diff and GitHub file browser are often insufficient for a thorough review.
 If you need to understand context (surrounding files, imports, test setup,
-dependency relationships), **ask the user for permission to clone the repo and
-check out the PR branch locally.**
+dependency relationships), **clone the repo and check out the PR branch locally.**
 
-**When to ask for local checkout:**
-- The PR touches files you're unfamiliar with and you need to see the broader
-  module structure.
-- You suspect a bug that would be confirmed by running the test suite.
-- The PR introduces a new dependency or build step you want to validate.
+You don't need to ask for permission — just clone it to `/tmp/pr-review-<number>`
+and clean up when done. This is especially important for unfamiliar codebases or
+large PRs where the diff alone doesn't provide enough context.
+
+**When to clone (balance thoroughness vs. token efficiency):**
+
+Always clone when:
+- The PR touches code you're not familiar with and you need surrounding context
+  (framework patterns, base classes, shared types, module boundaries).
+- The PR is in a repo you don't have in `/workspace`.
 - You need to trace types/imports across multiple packages in a monorepo.
 - The diff is large (>500 lines) and context is hard to follow in the browser.
+- You suspect a bug that would be confirmed by reading surrounding code or running tests.
+
+Usually skip cloning when:
+- The repo is already in `/workspace` and you can read files directly.
+- The PR is small, self-contained, and the diff tells the full story.
+- You're already familiar with the codebase patterns from prior reviews.
 
 **How to check out the PR branch:**
 
@@ -237,9 +257,12 @@ git checkout pr-<NUMBER>
 **What to do once checked out:**
 
 1. **Explore context** — Read surrounding files the PR imports from or depends
-   on (`rg`, `find`, `read`). Understand the test helpers, service layer, and
-   module boundaries.
-
+   on (`rg`, `find`, `read`). Understand the framework, base classes, service
+   layer, and module boundaries. Focus on:
+   - Base classes and interfaces the PR extends/implements
+   - Existing patterns in sibling modules/services
+   - Database schemas, type definitions, and shared utilities
+   - How other apps in the monorepo are structured
 2. **Run relevant tests** — Execute only the test suites touching changed code:
    ```bash
    cargo test                    # Rust
@@ -249,26 +272,18 @@ git checkout pr-<NUMBER>
    make test                     # Makefile-driven
    ```
    Report pass/fail and whether new behavior is actually exercised.
-
 3. **Run lint / type check** — Catch errors CI might miss:
    ```bash
    cargo clippy; pnpm lint; mypy .; golangci-lint run
    ```
-
 4. **Check for side effects** — After tests, run `git status`. Generated files
    (lockfiles, SDKs) that changed indicate missing regenerated artifacts in the PR.
-
 5. **Clean up** — Remove the temp clone when done:
    ```bash
    rm -rf /tmp/pr-review-<number>
    ```
 
-**Always ask the user first:** "This PR touches code I'm not deeply familiar
-with. Can I check out the branch locally and run the tests to give you a more
-thorough review?"
 
-If the user says yes, proceed. If no, do your best with the diff and GitHub
-file browser.
 
 ### Phase 3 — Structured Review
 
@@ -312,25 +327,67 @@ Perform the review systematically. Use these lenses:
 existing review comments (from Phase 2b). If the same file/line/issue was already
 flagged, skip it. Only present genuinely new findings to the user.
 
+**Leverage prior reviews as a filter:** because the easy issues are already
+caught, your job is to find the *non-obvious* ones. Do a second pass specifically
+looking for issues the first reviewers likely overlooked.
+
 ### Phase 4 — Deliver the Review
 
-Organize findings into a clear review comment.
+Separate the review into **two layers**: a high-level summary (the review body) and low-level inline comments on specific lines.
 
-#### Finding format
+#### Layer 1 — High-level review body (architecture + verdict)
 
-For each issue, classify severity and provide actionable feedback:
+Keep this concise. It should cover:
+1. **Acknowledge existing reviews** (if any). One brief sentence at the top.
+2. **Architecture assessment** — is the design sound? (see Phase 2c)
+3. **Overall verdict** — Approve / Request Changes / Comment
+4. **A brief severity list** of the findings (just titles, no details)
+5. **Highlight positives** — call out good patterns, clean tests
+6. **Nibble signature** — always end with `---\n*🤖 nibble-generated review*` so reviewers can identify AI-generated reviews
 
+```markdown
+## High-level Review
+
+Solid library foundation with good abstractions. The six-service pipeline is
+well-factored and testable.
+
+However, **requesting changes** due to a critical logic bug and a failing CI check.
+
+### Blockers
+- 🔴 `not_equals` operator logic is inverted on multi-value paths
+- 🟡 CI `Lint, Test and Build` is failing
+- 🟡 Missing test coverage for `not_equals` and `exists` operators
+
+### Minor
+- 🔵 Provider instance should be cached (not recreated per call)
+- 🔵 Placeholder regex only replaces first occurrence
+
+See inline comments for details.
+
+---
+*🤖 nibble-generated review*
 ```
-### 🔴 Critical / 🟡 Major / 🔵 Minor / 💡 Suggestion
 
-**File:** `path/to/file.rs:45-52`
+#### Layer 2 — Inline comments (code-level findings)
 
-The issue description and why it matters.
+Each finding that maps to a specific line should be an **inline comment**, not text in the review body. This keeps the review body readable and puts actionable feedback directly on the diff.
 
-```suggestion
-// Concrete code suggestion if applicable
+Draft each inline comment with:
+- `path`: file path (e.g. `apps/api/src/modules/catalog/catalog.module.ts`)
+- `line`: line number on the RIGHT side of the diff (the PR's version)
+- `side`: always `"RIGHT"` for comments on the PR's changes
+- `body`: the comment text (severity emoji + description + suggestion)
+
+```json
+{
+  "path": "apps/agent-observability/src/services/candidate-builder.service.ts",
+  "line": 115,
+  "side": "RIGHT",
+  "body": "🔴 **Critical — `not_equals` logic is inverted on multi-value paths**\n\n`arr.some((v) => v !== filterValue)` means 'match if ANY element is different' — almost always true for arrays with >1 element. The intended semantics for `not_equals` on a collection is 'match if NONE of the elements equal the filter value.'\n\n**Impact:** A generation-scoped judge with a `not_equals` filter on a multi-value path would incorrectly match traces that DO contain the excluded value, causing false-positive verdicts.\n\nSuggested fix: change to `arr.every((v) => v !== filterValue)`."
+}
 ```
-```
+
+**Rule of thumb:** If a finding references a specific file and line, it belongs as an inline comment. Meta concerns (CI status, missing tests for an entire operator, architectural concerns) belong in the review body.
 
 #### Severity guide
 
@@ -341,19 +398,11 @@ The issue description and why it matters.
 | 🔵 Minor | Style, naming, small improvements |
 | 💡 Suggestion | Optional improvements, questions, alternative approaches |
 
-#### Drafting the review
-
-1. **Summarize** your overall impression (approve, request changes, or comment)
-2. **List findings** grouped by severity (Critical → Suggestion)
-3. **Highlight positives** — call out good patterns, clever solutions, clean tests
-
-**Self-Review variation:** Frame findings as a pre-flight checklist:
-- "Before requesting review from the team, consider fixing..."
-- "CI is green — nice. One thing to double-check..."
-
 ### Phase 5 — Submit the Review
 
-Give the user options for how to submit:
+#### Option A — Review body only (no inline comments)
+
+Use `gh pr review` for a simple text-only review:
 
 ```bash
 # Approve with comments
@@ -366,10 +415,59 @@ gh pr review <NUMBER> --repo <owner/repo> --request-changes --body "<review body
 gh pr review <NUMBER> --repo <owner/repo> --comment --body "<review body>"
 ```
 
-**Always confirm with the user before submitting.** Show the full review text and
-let them edit or approve. Never submit without explicit confirmation.
+#### Option B — Review with inline comments (preferred for peer reviews)
+
+Use the **Reviews API** to create a single review that includes both the high-level body and inline comments on specific lines. This is the preferred approach when you have code-level findings.
+
+**Step 1 — Fetch the head commit SHA:**
+```bash
+gh pr view <NUMBER> --repo <owner/repo> --json headRefOid --jq '.headRefOid'
+```
+
+**Step 2 — Build a JSON payload with the review body and comments array:**
+
+```json
+{
+  "commit_id": "<headRefOid>",
+  "body": "## High-level Review\n\n...\n\n---\n*🤖 nibble-generated review*",
+  "event": "REQUEST_CHANGES",
+  "comments": [
+    {
+      "path": "apps/agent-observability/src/services/candidate-builder.service.ts",
+      "line": 115,
+      "side": "RIGHT",
+      "body": "🔴 **Critical — ..."
+    },
+    {
+      "path": "apps/agent-observability/src/services/judge-runner.service.ts",
+      "line": 48,
+      "side": "RIGHT",
+      "body": "🔵 **Minor — ..."
+    }
+  ]
+}
+```
+
+**Step 3 — Post via `gh api`:**
+```bash
+cat <<'EOF' > /tmp/review-payload.json
+{ "commit_id": "<sha>", "body": "...", "event": "REQUEST_CHANGES", "comments": [...] }
+EOF
+gh api repos/<owner>/<repo>/pulls/<number>/reviews --input /tmp/review-payload.json
+```
+
+**Important constraints:**
+- Each inline comment must reference a line that appears in the diff (added or context lines).
+- `side`: `"RIGHT"` for comments on the PR's version of the code.
+- `line`: the line number in the NEW file (the PR branch's version).
+- For multi-line comments, also include `start_line` and `start_side`.
+- Always use the latest `commit_id` (head of the PR branch), not the base.
+
+**Always confirm with the user before submitting.** Show the high-level review text and the list of inline comments (file + line + severity) and let them edit or approve. Never submit without explicit confirmation.
 
 ### Phase 5b — Inline Comments via API (Peer-Review only, Human-in-the-Loop)
+
+> **Note:** The preferred way to post inline comments is via the **Reviews API** (Phase 5, Option B), which creates both the review body and all inline comments in a single atomic call. Use the standalone comment API below only if you need to add comments to an already-submitted review.
 
 When reviewing someone else's PR, you can post **individual inline comments**
 directly on specific lines using the GitHub API. This is useful for precise,
@@ -476,12 +574,17 @@ gh pr view <NUMBER> --repo <owner/repo> --json headRefOid --jq '.headRefOid'
 gh repo clone <owner/repo> /tmp/pr-review-<number>
 cd /tmp/pr-review-<number> && gh pr checkout <NUMBER>
 
-# Submit top-level review
+# Submit top-level review (body only)
 gh pr review <NUMBER> --repo <owner/repo> --approve --body "<body>"
 gh pr review <NUMBER> --repo <owner/repo> --request-changes --body "<body>"
 gh pr review <NUMBER> --repo <owner/repo> --comment --body "<body>"
 
-# Inline comment on specific line (peer-review, HITL approved only)
+# Submit review with inline comments (preferred — body + comments in one call)
+# Build a JSON payload with "commit_id", "body", "event", and "comments" array,
+# then post via the Reviews API:
+gh api repos/{owner}/{repo}/pulls/{number}/reviews --input /tmp/review-payload.json
+
+# Inline comment on specific line (standalone, only if adding to existing review)
 gh api repos/{owner}/{repo}/pulls/{number}/comments \
   -f body="<comment>" -f path="<file>" -f line=<line> \
   -f side="RIGHT" -f commit_id="<sha>"
@@ -503,3 +606,5 @@ gh api repos/{owner}/{repo}/pulls/{number}/comments \
   already flagged issues, do not re-post the same comment. Acknowledge their
   review, add only net-new findings, and feel free to reply to their threads
   if you have additional context.
+- **Nibble signature:** Always end every review body with `---\n*🤖 nibble-generated review*`
+  so that human reviewers can identify which comments were AI-generated.
