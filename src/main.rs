@@ -3641,14 +3641,13 @@ pub(crate) fn prune_stale_tasks(db: &Database) -> Result<usize> {
     let mut pruned = 0;
 
     // Sandbox tasks: health-check each container.
-    //    - Dead      → container crashed; notify via Telegram, clean up state.
+    //    - Dead      → container crashed; clean up state.
     //    - Degraded  → container running but exec fails; update DB only.
     //    - Healthy   → all good, leave it alone.
     let states = db.list_container_states()?;
     if !states.is_empty() {
         let sandbox = PodmanSandbox::new();
-        let cfg = config::load().unwrap_or_default();
-        for (task_id, container_name, repo_path, _, _) in &states {
+        for (task_id, container_name, _repo_path, _, _) in &states {
             match sandbox.health_check(container_name) {
                 SandboxHealth::Healthy => {}
                 SandboxHealth::Stopped => {
@@ -3707,19 +3706,6 @@ pub(crate) fn prune_stale_tasks(db: &Database) -> Result<usize> {
                             &task_id[..8.min(task_id.len())]
                         );
                         pruned += 1;
-
-                        if cfg.telegram.is_configured() {
-                            let repo_label = std::path::Path::new(repo_path)
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or(repo_path.as_str());
-                            let msg = format!("💥 Sandbox for `{}` crashed or was killed by the OS.\nRe-spawn with: `nibble sandbox spawn {}`", repo_label, repo_path);
-                            if let Ok(text) =
-                                build_notification_text(db, Some(task_id), &msg, false)
-                            {
-                                let _ = notifications::telegram::send(&cfg.telegram, &text);
-                            }
-                        }
                     }
                 }
                 SandboxHealth::Degraded => {

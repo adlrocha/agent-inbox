@@ -23,10 +23,13 @@ spawner forwards `GITHUB_TOKEN` (and only `GITHUB_TOKEN`) into the container at
 is spawned, `gh` will be unauthenticated inside.
 
 **To fix:** On the host, run:
+
 ```bash
 export GITHUB_TOKEN=$(gh auth token)
 ```
+
 then spawn or attach with `--fresh`:
+
 ```bash
 nibble sandbox attach /path/to/repo --fresh
 ```
@@ -71,6 +74,7 @@ Present results as a numbered table:
 ```
 
 **Prioritization hints** (mention if applicable):
+
 - PRs labeled `urgent`, `security`, `hotfix` → review first
 - Older PRs (stale) → call out
 - Large PRs (>500 lines changed) → flag for the user
@@ -227,15 +231,17 @@ large PRs where the diff alone doesn't provide enough context.
 **When to clone (balance thoroughness vs. token efficiency):**
 
 Always clone when:
+
 - The PR touches code you're not familiar with and you need surrounding context
   (framework patterns, base classes, shared types, module boundaries).
-- The PR is in a repo you don't have in `/workspace`.
+- The PR is in a repo you don't have in `/<repo-name>`
 - You need to trace types/imports across multiple packages in a monorepo.
 - The diff is large (>500 lines) and context is hard to follow in the browser.
 - You suspect a bug that would be confirmed by reading surrounding code or running tests.
 
 Usually skip cloning when:
-- The repo is already in `/workspace` and you can read files directly.
+
+- The repo is already in `/<repo-name>` and you can read files directly.
 - The PR is small, self-contained, and the diff tells the full story.
 - You're already familiar with the codebase patterns from prior reviews.
 
@@ -264,6 +270,7 @@ git checkout pr-<NUMBER>
    - Database schemas, type definitions, and shared utilities
    - How other apps in the monorepo are structured
 2. **Run relevant tests** — Execute only the test suites touching changed code:
+
    ```bash
    cargo test                    # Rust
    pnpm test --filter=api        # JS/TS monorepo
@@ -271,57 +278,78 @@ git checkout pr-<NUMBER>
    go test ./...                 # Go
    make test                     # Makefile-driven
    ```
+
    Report pass/fail and whether new behavior is actually exercised.
 3. **Run lint / type check** — Catch errors CI might miss:
+
    ```bash
    cargo clippy; pnpm lint; mypy .; golangci-lint run
    ```
+
 4. **Check for side effects** — After tests, run `git status`. Generated files
    (lockfiles, SDKs) that changed indicate missing regenerated artifacts in the PR.
 5. **Clean up** — Remove the temp clone when done:
+
    ```bash
    rm -rf /tmp/pr-review-<number>
    ```
-
-
 
 ### Phase 3 — Structured Review
 
 Perform the review systematically. Use these lenses:
 
 #### A. Correctness
+
 - Does the code do what the PR description says?
 - Are edge cases handled? (empty inputs, null values, off-by-one, concurrent access)
 - Are error paths covered? Do errors propagate correctly?
 
 #### B. Design & Architecture
+
 - Does the change fit the existing codebase patterns?
 - Are abstractions at the right level?
 - Is there unnecessary coupling or circular dependencies?
 - Are new types/functions well-named and in the right module?
 
 #### C. Security
+
 - Input validation and sanitization
 - Auth/authz changes — are they safe?
 - Secrets or credentials exposed?
 - Injection vectors (SQL, command, path traversal)?
 
 #### D. Performance
+
 - N+1 queries or unnecessary loops?
 - Memory allocation patterns (large clones, missing iterators)?
 - Async/blocking mismatches?
 
 #### E. Testing
+
 - Are new behaviors tested?
 - Do tests cover error paths, not just happy paths?
 - Are mocks/stubs appropriate?
 - Are there missing test cases for the acceptance criteria?
 
 #### F. Readability & Maintainability
+
 - Clear naming, no cryptic abbreviations
 - Comments explain *why*, not *what*
 - No dead code or TODOs without tracking issues
 - Consistent style with the rest of the codebase
+- Housekeeping: leftover `.gitkeep` in directories that now have files, stale re-exports, dead imports
+
+#### G. AI/LLM-Specific (when the PR includes prompts, judge configs, or AI content)
+
+- **Prompt engineering:** Do examples bias the judge toward a specific domain? Are edge cases in the prompt realistic?
+- **Shared context:** Is preliminary system context duplicated across prompt files? Should it be extracted into a shared preamble?
+- **Config structure:** If multiple configs share a pattern, should it be formalized (e.g., structured sections, schema extensions) to make adding new entries easy?
+- **Over-optimization risk:** Are there too many examples that might cause the LLM to over-fit to those scenarios?
+
+#### H. Delegation & Uncertainty
+
+- If a change touches a domain you're not confident about (DB schema, business logic, external API contracts), **tag a domain expert** rather than guessing. Example: `@engineer-name to confirm we have this data in the database.`
+- When you're unsure but have a hunch, frame it as a question or soft suggestion ("I would maybe iterate on this..."), not a prescriptive finding.
 
 **Peer-Review de-duplication rule:** Before writing up a finding, scan the
 existing review comments (from Phase 2b). If the same file/line/issue was already
@@ -338,6 +366,7 @@ Separate the review into **two layers**: a high-level summary (the review body) 
 #### Layer 1 — High-level review body (architecture + verdict)
 
 Keep this concise. It should cover:
+
 1. **Acknowledge existing reviews** (if any). One brief sentence at the top.
 2. **Architecture assessment** — is the design sound? (see Phase 2c)
 3. **Overall verdict** — Approve / Request Changes / Comment
@@ -373,6 +402,7 @@ See inline comments for details.
 Each finding that maps to a specific line should be an **inline comment**, not text in the review body. This keeps the review body readable and puts actionable feedback directly on the diff.
 
 Draft each inline comment with:
+
 - `path`: file path (e.g. `apps/api/src/modules/catalog/catalog.module.ts`)
 - `line`: line number on the RIGHT side of the diff (the PR's version)
 - `side`: always `"RIGHT"` for comments on the PR's changes
@@ -420,6 +450,7 @@ gh pr review <NUMBER> --repo <owner/repo> --comment --body "<review body>"
 Use the **Reviews API** to create a single review that includes both the high-level body and inline comments on specific lines. This is the preferred approach when you have code-level findings.
 
 **Step 1 — Fetch the head commit SHA:**
+
 ```bash
 gh pr view <NUMBER> --repo <owner/repo> --json headRefOid --jq '.headRefOid'
 ```
@@ -449,6 +480,7 @@ gh pr view <NUMBER> --repo <owner/repo> --json headRefOid --jq '.headRefOid'
 ```
 
 **Step 3 — Post via `gh api`:**
+
 ```bash
 cat <<'EOF' > /tmp/review-payload.json
 { "commit_id": "<sha>", "body": "...", "event": "REQUEST_CHANGES", "comments": [...] }
@@ -457,6 +489,7 @@ gh api repos/<owner>/<repo>/pulls/<number>/reviews --input /tmp/review-payload.j
 ```
 
 **Important constraints:**
+
 - Each inline comment must reference a line that appears in the diff (added or context lines).
 - `side`: `"RIGHT"` for comments on the PR's version of the code.
 - `line`: the line number in the NEW file (the PR branch's version).
@@ -475,6 +508,7 @@ actionable feedback that appears in the diff view.
 
 **Step 1 — Draft comments.** For each new finding (not already flagged by others),
 draft:
+
 - `path`: file path (e.g. `apps/api/src/modules/catalog/catalog.module.ts`)
 - `line`: line number on the RIGHT side of the diff (the PR's version)
 - `side`: always `"RIGHT"` for comments on the PR's changes
@@ -482,6 +516,7 @@ draft:
 - `commit_id`: the latest commit SHA on the PR branch (needed for API)
 
 Fetch the latest commit SHA:
+
 ```bash
 gh pr view <NUMBER> --repo <owner/repo> --json headRefOid --jq '.headRefOid'
 ```
@@ -510,6 +545,7 @@ creator: creator ? {
 
 Post this comment? [yes / skip / edit]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 ```
 
 Wait for the user's explicit response (`yes`, `skip`, or an edited version).
@@ -527,6 +563,7 @@ gh api repos/{owner}/{repo}/pulls/{number}/comments \
 ```
 
 **Important constraints:**
+
 - Comments can only be posted on lines that appear in the diff (changed or context).
 - If a line is outside the diff hunk, the API will reject it.
 - For multi-line comments, also include `start_line` and `start_side`.
