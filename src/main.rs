@@ -3688,6 +3688,16 @@ pub(crate) fn prune_stale_tasks(db: &Database) -> Result<usize> {
         }
     }
 
+    // Lazily GC exited sandbox tasks older than 7 days.
+    match db.delete_exited_sandbox_tasks_older_than(7) {
+        Ok(0) => {}
+        Ok(n) => eprintln!(
+            "[prune] GC: deleted {} exited sandbox task(s) older than 7 days",
+            n
+        ),
+        Err(e) => eprintln!("[prune] GC warning: {e:#}"),
+    }
+
     Ok(pruned)
 }
 

@@ -567,7 +567,7 @@ impl Database {
                     repo_path, worktree_path, sandbox_type, sandbox_config
              FROM tasks
              WHERE sandbox_type != 'none'
-             ORDER BY created_at DESC",
+             ORDER BY created_at DESC, id DESC",
         )?;
 
         let tasks = stmt
@@ -588,7 +588,7 @@ impl Database {
                         repo_path, worktree_path, sandbox_type, sandbox_config
                  FROM tasks
                  WHERE repo_path = ?1 AND sandbox_type != 'none'
-                 ORDER BY created_at DESC LIMIT 1",
+                 ORDER BY created_at DESC, id DESC LIMIT 1",
                 params![repo_path],
                 |row| self.row_to_task(row),
             )
@@ -605,7 +605,7 @@ impl Database {
                     repo_path, worktree_path, sandbox_type, sandbox_config
              FROM tasks
              WHERE repo_path = ?1 AND sandbox_type != 'none'
-             ORDER BY created_at DESC",
+             ORDER BY created_at DESC, id DESC",
         )?;
 
         let tasks = stmt
@@ -613,6 +613,20 @@ impl Database {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(tasks)
+    }
+
+    /// Delete sandbox tasks that have been exited for longer than `days`.
+    /// Returns the number of tasks deleted.
+    pub fn delete_exited_sandbox_tasks_older_than(&self, days: i64) -> Result<usize> {
+        let cutoff = Utc::now() - chrono::Duration::days(days);
+        let deleted = self.conn.execute(
+            "DELETE FROM tasks
+             WHERE sandbox_type != 'none'
+               AND status = 'exited'
+               AND updated_at < ?1",
+            params![cutoff.timestamp()],
+        )?;
+        Ok(deleted)
     }
 
     // Hermes repo mount methods
@@ -779,7 +793,7 @@ impl Database {
                 let mut stmt = self.conn.prepare(
                     "SELECT id, repo_path, label, schedule, prompt, enabled, skip_if_running,
                             running, last_run, next_run, expires_at, created_at
-                     FROM cron_jobs WHERE repo_path = ?1 ORDER BY created_at DESC",
+                     FROM cron_jobs WHERE repo_path = ?1 ORDER BY created_at DESC, id DESC",
                 )?;
                 let jobs = stmt
                     .query_map(params![repo_path], |row| self.row_to_cron_job(row))?
@@ -790,7 +804,7 @@ impl Database {
                 let mut stmt = self.conn.prepare(
                     "SELECT id, repo_path, label, schedule, prompt, enabled, skip_if_running,
                             running, last_run, next_run, expires_at, created_at
-                     FROM cron_jobs ORDER BY created_at DESC",
+                     FROM cron_jobs ORDER BY created_at DESC, id DESC",
                 )?;
                 let jobs = stmt
                     .query_map([], |row| self.row_to_cron_job(row))?
