@@ -620,7 +620,6 @@ fn main() -> Result<()> {
                 factory,
                 hermes,
                 pi,
-                browser,
             } => {
                 let effective_repo_path = if let Some(ref branch_name) = branch {
                     let worktree = create_worktree(std::path::Path::new(&repo_path), branch_name)?;
@@ -630,16 +629,11 @@ fn main() -> Result<()> {
                 };
                 let cfg = config::load().unwrap_or_default();
                 let factory_enabled = factory.unwrap_or(cfg.factory.enabled);
-                let effective_image = if browser {
-                    "nibble-sandbox:browser".to_string()
-                } else {
-                    image
-                };
                 cmd_sandbox_spawn(
                     &db,
                     effective_repo_path,
                     task,
-                    effective_image,
+                    image,
                     fresh,
                     session_id,
                     false,
@@ -663,7 +657,6 @@ fn main() -> Result<()> {
                 pi,
                 session,
                 branch,
-                browser: _,
             } => {
                 // If --branch is given, resolve the worktree path (creating it if needed)
                 // and use that as the effective target instead of the original repo.

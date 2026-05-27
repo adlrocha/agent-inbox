@@ -179,9 +179,6 @@ pub enum SandboxAction {
         /// Installs @earendil-works/pi-coding-agent at spawn time.
         #[arg(long)]
         pi: bool,
-        /// Use the browser-enabled sandbox image with Playwright pre-installed.
-        #[arg(long)]
-        browser: bool,
     },
 
     /// List all sandbox containers and their status
@@ -210,9 +207,6 @@ pub enum SandboxAction {
         /// Use Pi (pi.dev) coding agent instead of Claude Code
         #[arg(long)]
         pi: bool,
-        /// Use the browser-enabled sandbox image with Playwright pre-installed.
-        #[arg(long)]
-        browser: bool,
         /// Resume a specific session by ID (from `nibble session list`).
         /// Overrides the stored session for this task.
         #[arg(long)]

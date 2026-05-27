@@ -32,7 +32,6 @@ This section lists every feature area in the project. Use it to audit what's wor
 | 18 | **Health checks** | ops | `SandboxHealth` enum (Healthy/Degraded/Dead); periodic prune in listen daemon; Telegram alert on unexpected container death |
 | 19 | **Auto-resume on reboot** | ops | systemd user service (`nibble-resume.service`) restarts containers after host reboot |
 | 20 | **Inject** | ops | `nibble inject <id> <msg>` — send a message directly to any sandbox agent, bypassing Telegram |
-| 21 | **Browser Automation** | pi | Playwright + Chromium inside sandboxes; screenshot/click/type/read tools; companion mode via CDP to host Brave |
 
 ---
 
@@ -368,74 +367,6 @@ The sandbox stops but **mounted repos are preserved** in the database. Running `
 ### Security model
 
 Only the repos you explicitly mount are accessible inside the container. No home directory is exposed. The Hermes agent runs as non-root (`node` user) with `--network host` to reach a local LLM.
-
----
-
-## Browser Automation (Pi)
-
-Nibble sandboxes can run a web browser inside the container, giving Pi agents the ability to navigate websites, take screenshots, fill forms, and extract content — all visible to you inline in the terminal.
-
-### Spawn a browser-enabled sandbox
-
-```bash
-nibble sandbox spawn /path/to/repo --pi --browser
-```
-
-This uses the `nibble-sandbox:browser` image, which includes Playwright and Chromium pre-installed.
-
-### Available browser tools
-
-Inside the sandbox, Pi automatically has these tools:
-
-| Tool | What it does |
-|------|-------------|
-| `browser_launch` | Start a headless browser or connect to an existing one |
-| `browser_navigate` | Open a URL |
-| `browser_screenshot` | Capture the page (returns an inline image the model can see) |
-| `browser_click` | Click an element by selector or visible text |
-| `browser_type` | Type into an input field |
-| `browser_select` | Choose an option from a `<select>` dropdown |
-| `browser_read` | Extract readable page text (smart extraction, excludes nav/footer) |
-| `browser_evaluate` | Execute JavaScript and return the result |
-| `browser_scroll` | Scroll up, down, top, or bottom |
-| `browser_go_back` / `browser_go_forward` | History navigation |
-| `browser_close` | Close the browser and free resources |
-
-### Companion mode: connect to your Brave browser
-
-You can have the agent act as a companion to your existing Brave browser on the host:
-
-1. **Launch Brave with remote debugging** on the host:
-   ```bash
-   brave-browser --remote-debugging-port=9222
-   ```
-
-2. **Inside the sandbox**, connect via CDP:
-   ```
-   browser_launch mode=connect cdpUrl=http://localhost:9222
-   ```
-
-   Because nibble sandboxes use `--network host`, `localhost:9222` inside the container reaches your host Brave. The agent can now see what you're browsing, click for you, fill forms, and take screenshots — all while you watch in your own browser window.
-
-### Example agent workflow
-
-```
-> Go to https://github.com/nousresearch/hermes-agent and check if it already
-> supports browser automation.
-
-browser_navigate url=https://github.com/nousresearch/hermes-agent
-browser_screenshot
-browser_read
-```
-
-The screenshot appears inline in the Pi TUI, so both you and the model can see the page. The agent can then scroll, click links, and continue exploring.
-
-### Notes
-
-- Screenshots are returned as base64 PNG images in tool results. Pi displays them inline in the terminal.
-- The browser runs headless by default. For companion mode with Brave, the browser is already visible on your host.
-- Always call `browser_close` when done to free memory.
-- If Playwright is missing, the extension returns an error telling the agent how to install it.
 
 ---
 
