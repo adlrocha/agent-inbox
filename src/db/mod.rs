@@ -1195,4 +1195,109 @@ mod tests {
             "hermes_repos table should exist in fresh schema"
         );
     }
+
+    /// INV-1: list_sandbox_tasks filters out non-sandbox tasks
+    #[test]
+    fn test_list_sandbox_tasks_filters_non_sandbox() {
+        let (db, _temp) = create_test_db();
+
+        let mut plain = Task::new(
+            "plain".into(),
+            AgentType::ClaudeCode,
+            "plain".into(),
+            None,
+            None,
+        );
+        db.insert_task(&plain).unwrap();
+
+        let mut sandboxed = Task::new(
+            "sandbox".into(),
+            AgentType::ClaudeCode,
+            "sandbox".into(),
+            None,
+            None,
+        );
+        sandboxed.sandbox_type = SandboxType::Podman;
+        sandboxed.container_id = Some("abc".into());
+        sandboxed.container_name = Some("nibble-test".into());
+        sandboxed.repo_path = Some("/tmp/test".into());
+        db.insert_task(&sandboxed).unwrap();
+
+        let list = db.list_sandbox_tasks().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].task_id, "sandbox");
+        assert_eq!(list[0].container_name, Some("nibble-test".into()));
+    }
+
+    /// INV-2: get_task_by_repo_path returns the most recent sandbox for a repo
+    #[test]
+    fn test_get_task_by_repo_path() {
+        let (db, _temp) = create_test_db();
+
+        let mut t1 = Task::new(
+            "old".into(),
+            AgentType::ClaudeCode,
+            "old".into(),
+            None,
+            None,
+        );
+        t1.sandbox_type = SandboxType::Podman;
+        t1.repo_path = Some("/tmp/repo".into());
+        db.insert_task(&t1).unwrap();
+
+        // Force a small delay so created_at differs
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        let mut t2 = Task::new(
+            "new".into(),
+            AgentType::ClaudeCode,
+            "new".into(),
+            None,
+            None,
+        );
+        t2.sandbox_type = SandboxType::Podman;
+        t2.repo_path = Some("/tmp/repo".into());
+        db.insert_task(&t2).unwrap();
+
+        let found = db.get_task_by_repo_path("/tmp/repo").unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().task_id, "new");
+
+        assert!(db.get_task_by_repo_path("/nonexistent").unwrap().is_none());
+    }
+
+    /// INV-3: get_tasks_by_repo_path returns all sandbox tasks for a repo, newest first
+    #[test]
+    fn test_get_tasks_by_repo_path() {
+        let (db, _temp) = create_test_db();
+
+        let mut t1 = Task::new(
+            "first".into(),
+            AgentType::ClaudeCode,
+            "first".into(),
+            None,
+            None,
+        );
+        t1.sandbox_type = SandboxType::Podman;
+        t1.repo_path = Some("/tmp/repo".into());
+        db.insert_task(&t1).unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        let mut t2 = Task::new(
+            "second".into(),
+            AgentType::ClaudeCode,
+            "second".into(),
+            None,
+            None,
+        );
+        t2.sandbox_type = SandboxType::Podman;
+        t2.repo_path = Some("/tmp/repo".into());
+        db.insert_task(&t2).unwrap();
+
+        let list = db.get_tasks_by_repo_path("/tmp/repo").unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].task_id, "second");
+        assert_eq!(list[1].task_id, "first");
+    }
 }

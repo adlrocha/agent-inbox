@@ -53,8 +53,11 @@ impl PodmanSandbox {
 
     fn build_image(&self, image_name: &str) -> Result<()> {
         let default_hermes_image = "nibble-hermes:latest";
+        let default_browser_image = "nibble-sandbox:browser";
         let dockerfile = if image_name == default_hermes_image {
             self.generate_hermes_dockerfile()
+        } else if image_name == default_browser_image {
+            self.generate_browser_dockerfile()
         } else {
             self.generate_dockerfile()
         };
@@ -128,6 +131,79 @@ USER node
 
 # Install Claude Code via the official installer (installs to ~/.local/bin/claude)
 RUN curl -fsSL https://claude.ai/install.sh | bash
+
+# Add ~/.local/bin (claude) to PATH
+ENV PATH=/home/node/.local/bin:/usr/local/bin:$PATH
+
+CMD ["bash"]
+"#
+        .to_string()
+    }
+
+    /// Dockerfile for browser-enabled sandboxes.
+    /// Extends the standard image with Playwright and Chromium for web automation.
+    fn generate_browser_dockerfile(&self) -> String {
+        r#"FROM node:22-slim
+
+# Install system dependencies.
+# node:22-slim already has a 'node' user (uid 1000) — we reuse it.
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    procps \
+    sudo \
+    jq \
+    gnupg \
+    libnss3 \
+    libnspr4 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libatspi2.0-0 \
+    libgtk-3-0 \
+    libgdk-pixbuf2.0-0 \
+    fonts-liberation \
+    libvpx9 \
+    libevent-2.1-7 \
+    libopus0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install GitHub CLI (gh) from the official apt repository.
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+    && apt-get update && apt-get install -y -qq gh \
+    && rm -rf /var/lib/apt/lists/*
+
+# Give the existing 'node' user passwordless sudo so it can install
+# system packages inside the container.
+RUN usermod -aG sudo node \
+    && echo "node ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/node \
+    && chmod 0440 /etc/sudoers.d/node
+
+# Create workspace directory owned by node
+RUN mkdir -p /workspace && chown node:node /workspace
+WORKDIR /workspace
+
+# Switch to node user
+USER node
+
+# Install Claude Code via the official installer (installs to ~/.local/bin/claude)
+RUN curl -fsSL https://claude.ai/install.sh | bash
+
+# Install Playwright and Chromium browser
+RUN npm install -g playwright \
+    && npx playwright install chromium
 
 # Add ~/.local/bin (claude) to PATH
 ENV PATH=/home/node/.local/bin:/usr/local/bin:$PATH
@@ -217,6 +293,7 @@ CMD ["bash"]
             ("cargo-registry", "/home/node/.cargo/registry"),
             ("cargo-git", "/home/node/.cargo/git"),
             ("rustup", "/home/node/.rustup"),
+            ("playwright", "/home/node/.cache/ms-playwright"),
         ];
 
         let mut volumes = Vec::new();
@@ -742,6 +819,37 @@ mod tests {
         assert_ne!(
             hermes_df, standard_df,
             "Hermes and standard Dockerfiles must differ"
+        );
+    }
+
+    /// Browser Dockerfile contains Playwright and Chromium deps
+    #[test]
+    fn test_browser_dockerfile_contains_playwright() {
+        let sandbox = PodmanSandbox::new();
+        let df = sandbox.generate_browser_dockerfile();
+        assert!(
+            df.contains("playwright"),
+            "Browser Dockerfile must install Playwright"
+        );
+        assert!(
+            df.contains("chromium"),
+            "Browser Dockerfile must mention Chromium"
+        );
+        assert!(
+            df.contains("libnss3"),
+            "Browser Dockerfile must install browser system deps"
+        );
+    }
+
+    /// Browser Dockerfile is different from standard dockerfile
+    #[test]
+    fn test_browser_dockerfile_separate_from_standard() {
+        let sandbox = PodmanSandbox::new();
+        let browser_df = sandbox.generate_browser_dockerfile();
+        let standard_df = sandbox.generate_standard_dockerfile();
+        assert_ne!(
+            browser_df, standard_df,
+            "Browser and standard Dockerfiles must differ"
         );
     }
 }

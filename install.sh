@@ -307,6 +307,8 @@ done
 NIBBLE_EXT_DIR="$HOME/.nibble/extensions"
 PI_EXT_DIR="$HOME/.pi/agent/extensions"
 mkdir -p "$NIBBLE_EXT_DIR"
+
+# Copy flat .ts extensions
 for ext_file in "$REPO_DIR/pi-extensions/"*.ts; do
     [ -f "$ext_file" ] || continue
     ext_name="$(basename "$ext_file")"
@@ -321,6 +323,24 @@ for ext_file in "$REPO_DIR/pi-extensions/"*.ts; do
         ok "pi extension: $ext_name → ~/.pi/agent/extensions/ (copy)"
     fi
 done
+
+# Copy directory-based extensions (e.g. pi-browser/ with package.json)
+for ext_dir in "$REPO_DIR/pi-extensions/"*/; do
+    [ -d "$ext_dir" ] || continue
+    ext_name="$(basename "$ext_dir")"
+    # Skip if it's not a real extension directory
+    [ -f "$ext_dir/package.json" ] || [ -f "$ext_dir/index.ts" ] || continue
+    mkdir -p "$NIBBLE_EXT_DIR/$ext_name"
+    cp -r "$ext_dir/"* "$NIBBLE_EXT_DIR/$ext_name/"
+    ok "pi extension: $ext_name/ → ~/.nibble/extensions/$ext_name/"
+    if [ -d "$PI_EXT_DIR" ] || [ -d "$HOME/.pi" ]; then
+        mkdir -p "$PI_EXT_DIR"
+        rm -rf "$PI_EXT_DIR/$ext_name"
+        cp -r "$ext_dir" "$PI_EXT_DIR/$ext_name"
+        ok "pi extension: $ext_name/ → ~/.pi/agent/extensions/$ext_name/ (copy)"
+    fi
+done
+
 if [ ! -d "$HOME/.pi" ]; then
     warn "~/.pi/ not found — extensions staged in ~/.nibble/extensions/ only"
     warn "  (will be installed automatically when you spawn a Pi sandbox)"
@@ -397,6 +417,14 @@ if "$BIN_DIR/nibble" sandbox build --image nibble-hermes:latest $SANDBOX_BUILD_A
     ok "Hermes sandbox image ready: nibble-hermes:latest"
 else
     ok "Hermes image will be built on first 'nibble hermes init'"
+fi
+
+# ── 5c. Browser sandbox image ─────────────────────────────────────────────────
+# Browser-enabled image with Playwright + Chromium for web automation.
+if "$BIN_DIR/nibble" sandbox build --image nibble-sandbox:browser $SANDBOX_BUILD_ARGS 2>/dev/null; then
+    ok "Browser sandbox image ready: nibble-sandbox:browser"
+else
+    ok "Browser image will be built on first 'nibble sandbox spawn --browser'"
 fi
 
 # Ensure SYSTEMD_DIR is defined before any service installation sections.
@@ -681,12 +709,13 @@ echo "  Verify:      nibble --help"
 echo "  Test notify: nibble notify --message 'install test' --attention"
 echo ""
 echo -e "${BOLD}Sandbox usage:${NC}"
-echo "  Start agent:  nibble sandbox spawn /path/to/repo"
-echo "  List agents:  nibble sandbox list"
-echo "  Attach:       nibble sandbox attach <task-id>"
-echo "  Kill agent:   nibble sandbox kill <task-id>"
-echo "  Watch:        nibble watch"
-echo "  Rebuild img:  ./install.sh --rebuild"
+echo "  Start agent:   nibble sandbox spawn /path/to/repo"
+echo "  With browser:  nibble sandbox spawn /path/to/repo --pi --browser"
+echo "  List agents:   nibble sandbox list"
+echo "  Attach:        nibble sandbox attach <task-id>"
+echo "  Kill agent:    nibble sandbox kill <task-id>"
+echo "  Watch:         nibble watch"
+echo "  Rebuild img:   ./install.sh --rebuild"
 echo ""
 echo -e "${BOLD}Hermes usage:${NC}"
 echo "  Start:        nibble hermes init"
