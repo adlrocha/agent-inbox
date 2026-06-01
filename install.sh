@@ -30,6 +30,7 @@ RUN_LISTEN=false
 RUN_LLAMA=false
 RUN_BASELIGHT=false
 RUN_PRIVACY_PROXY=false
+RUN_BROWSER=false
 REBUILD_IMAGE=false
 RECOVER_ZIP=""
 
@@ -40,6 +41,7 @@ while [ $# -gt 0 ]; do
         --llama)      RUN_LLAMA=true; shift ;;
         --baselight)  RUN_BASELIGHT=true; shift ;;
         --privacy-proxy) RUN_PRIVACY_PROXY=true; shift ;;
+        --browser)    RUN_BROWSER=true; shift ;;
         --rebuild)    REBUILD_IMAGE=true; shift ;;
         --recover)
             if [ -z "${2:-}" ] || [ "${2#-}" != "$2" ]; then
@@ -59,6 +61,7 @@ echo "         --listen     set up Telegram reply listener daemon"
 echo "         --llama      set up llama-server systemd service"
 echo "         --baselight      install Baselight MCP server in Claude Code"
 echo "         --privacy-proxy  install LLM privacy filter proxy service"
+echo "         --browser        set up Chromium CDP integration for agents"
 echo "         --rebuild        force rebuild the sandbox container image"
 echo "         --recover        restore from a backup zip after install"
 echo ""
@@ -662,7 +665,64 @@ else
     fi
 fi
 
-# ── 12. Recover from backup (optional) ────────────────────────────────────────
+# ── 12. Browser CDP integration (optional) ───────────────────────────────────
+if [ "$RUN_BROWSER" = true ]; then
+    step "Setting up Chromium CDP browser integration"
+
+    # Install browser.sh to ~/.local/bin/browser
+    mkdir -p "$BIN_DIR"
+    cp "$REPO_DIR/scripts/browser.sh" "$BIN_DIR/browser"
+    chmod +x "$BIN_DIR/browser"
+    ok "browser → $BIN_DIR/browser"
+
+    # Create persistent Chromium profile dir
+    mkdir -p "$HOME/.nibble/chromium-profile"
+    ok "Chromium profile dir: ~/.nibble/chromium-profile"
+
+    # Add chromium-debug alias to shell RC
+    BROWSER_ALIAS='alias chromium-debug='"'"'chromium --remote-debugging-port=9222 --user-data-dir=$HOME/.nibble/chromium-profile --no-first-run --no-default-browser-check'"'"
+    SHELL_RC=""
+    [ -f "$HOME/.zshrc" ]  && SHELL_RC="$HOME/.zshrc"
+    [ -f "$HOME/.bashrc" ] && [ -z "$SHELL_RC" ] && SHELL_RC="$HOME/.bashrc"
+
+    if [ -n "$SHELL_RC" ]; then
+        if grep -q "chromium-debug" "$SHELL_RC" 2>/dev/null; then
+            ok "chromium-debug alias already in $SHELL_RC"
+        else
+            echo "" >> "$SHELL_RC"
+            echo "# nibble: Chromium CDP debug alias (added by install.sh --browser)" >> "$SHELL_RC"
+            echo "$BROWSER_ALIAS" >> "$SHELL_RC"
+            ok "chromium-debug alias added to $SHELL_RC"
+            warn "Run 'source $SHELL_RC' or open a new terminal to activate the alias"
+        fi
+    else
+        warn "Could not detect shell RC. Add this alias manually:"
+        warn "  $BROWSER_ALIAS"
+    fi
+
+    # Add CDP curl permission to project settings if not present
+    PROJ_SETTINGS="$REPO_DIR/.claude/settings.json"
+    if [ -f "$PROJ_SETTINGS" ] && command -v jq >/dev/null 2>&1; then
+        if jq -e '.permissions.allow // [] | map(select(test("localhost:9222"))) | length > 0' "$PROJ_SETTINGS" >/dev/null 2>&1; then
+            ok "CDP curl permission already in .claude/settings.json"
+        else
+            jq '.permissions.allow += ["Bash(curl http://localhost:9222*)", "Bash(curl -s http://localhost:9222*)"]' \
+                "$PROJ_SETTINGS" > "$PROJ_SETTINGS.tmp" \
+                && mv "$PROJ_SETTINGS.tmp" "$PROJ_SETTINGS"
+            ok "CDP curl permission added to .claude/settings.json"
+        fi
+    fi
+else
+    if [ -x "$BIN_DIR/browser" ]; then
+        ok "Browser CDP integration already installed"
+    else
+        echo ""
+        warn "Chromium CDP integration not set up. Enable with:"
+        warn "  ./install.sh --browser"
+    fi
+fi
+
+# ── 14. Recover from backup (optional) ────────────────────────────────────────
 if [ -n "$RECOVER_ZIP" ]; then
     step "Recovering from backup"
     if [ ! -f "$RECOVER_ZIP" ]; then
@@ -673,7 +733,7 @@ if [ -n "$RECOVER_ZIP" ]; then
     ok "Restored from $RECOVER_ZIP"
 fi
 
-# ── 13. Done ───────────────────────────────────────────────────────────────────
+# ── 15. Done ───────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}${GREEN}Done!${NC} Restart Claude Code for hooks to take effect."
 echo ""

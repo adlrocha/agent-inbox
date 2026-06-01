@@ -644,6 +644,18 @@ pub enum CronAction {
         expires: Option<String>,
     },
 
+    /// Disable a cron job without deleting it (can be re-enabled with start)
+    Stop {
+        /// Cron job ID or label
+        id: String,
+    },
+
+    /// Re-enable a previously stopped cron job
+    Start {
+        /// Cron job ID or label
+        id: String,
+    },
+
     /// Delete a cron job
     Kill {
         /// Cron job ID or label

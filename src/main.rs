@@ -594,6 +594,14 @@ fn main() -> Result<()> {
                     &db, cron_id, schedule, prompt, label, enable, disable, expires,
                 )?;
             }
+            CronAction::Stop { id } => {
+                let cron_id = resolve_cron_id(&db, &id)?;
+                cmd_cron_edit(&db, cron_id, None, None, None, false, true, None)?;
+            }
+            CronAction::Start { id } => {
+                let cron_id = resolve_cron_id(&db, &id)?;
+                cmd_cron_edit(&db, cron_id, None, None, None, true, false, None)?;
+            }
             CronAction::Kill { id } => {
                 let cron_id = resolve_cron_id(&db, &id)?;
                 let deleted = db.delete_cron_job(cron_id)?;
