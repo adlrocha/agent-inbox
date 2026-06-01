@@ -1454,11 +1454,16 @@ fn cmd_hermes_spawn_internal(db: &Database) -> Result<String> {
     }
 
     // INV-2: Gateway as PID 1 if configured
+    // Check for updates before starting the gateway so the running container
+    // is always on the latest hermes-agent release.
     let entrypoint = if hcfg.gateway {
+        let update_cmd = "uv pip install --upgrade hermes-agent \
+            --python /home/node/.hermes-agent/venv/bin/python \
+            2>&1 | grep -v '^Resolved\\|^Audited' || true";
         vec![
             "/bin/bash".to_string(),
             "-lc".to_string(),
-            "hermes gateway".to_string(),
+            format!("{} && hermes gateway", update_cmd),
         ]
     } else {
         vec![]
@@ -1969,13 +1974,18 @@ pub(crate) fn cmd_sandbox_spawn(
     }
 
     // Hermes gateway as PID 1 if configured
+    // Check for updates before starting the gateway so the running container
+    // is always on the latest hermes-agent release.
     let entrypoint = if hermes {
         let hcfg = hermes_cfg.as_ref().unwrap();
         if hcfg.gateway {
+            let update_cmd = "uv pip install --upgrade hermes-agent \
+                --python /home/node/.hermes-agent/venv/bin/python \
+                2>&1 | grep -v '^Resolved\\|^Audited' || true";
             vec![
                 "/bin/bash".to_string(),
                 "-lc".to_string(),
-                "hermes gateway".to_string(),
+                format!("{} && hermes gateway", update_cmd),
             ]
         } else {
             vec![]
