@@ -280,9 +280,9 @@ chmod +x "$WRAPPERS_DIR/claude-wrapper"
 ok "claude-wrapper"
 
 # ── 4a. Install AI Factory skills ─────────────────────────────────────────────
-# Skills are installed to both ~/.claude/skills/ (Claude Code) and
-# ~/.nibble/skills/ (Pi harness). Existing files are overwritten so
-# updates always propagate.
+# Skills are installed to ~/.claude/skills/ (Claude Code),
+# ~/.nibble/skills/ (internal), and ~/.pi/agent/skills/ (Pi harness).
+# Existing files are overwritten so updates always propagate.
 install_skill() {
     local src_dir="$1"
     local dest_dir="$2"
@@ -296,13 +296,21 @@ install_skill() {
 
 CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
 NIBBLE_SKILLS_DIR="$HOME/.nibble/skills"
+PI_SKILLS_DIR="$HOME/.pi/agent/skills"
 mkdir -p "$CLAUDE_SKILLS_DIR" "$NIBBLE_SKILLS_DIR"
 
 for skill_dir in "$REPO_DIR/skills"/{factory,nibble}-*/; do
     [ -d "$skill_dir" ] || continue
     install_skill "$skill_dir" "$CLAUDE_SKILLS_DIR"
     install_skill "$skill_dir" "$NIBBLE_SKILLS_DIR"
+    if [ -d "$PI_SKILLS_DIR" ] || [ -d "$HOME/.pi" ]; then
+        mkdir -p "$PI_SKILLS_DIR"
+        install_skill "$skill_dir" "$PI_SKILLS_DIR"
+    fi
 done
+if [ ! -d "$HOME/.pi" ]; then
+    warn "~/.pi/ not found — skills staged in ~/.nibble/skills/ only"
+fi
 
 # ── 4b. Install Pi extensions ─────────────────────────────────────────────────
 # Nibble-managed Pi extensions live in pi-extensions/ and are installed to

@@ -1994,8 +1994,10 @@ pub(crate) fn cmd_sandbox_spawn(
         vec![]
     };
 
-    // Pi-specific mounts: ~/.pi/ config dir
-    if pi {
+    // Mount ~/.pi config dir (always — skills/extensions/sessions are needed
+    // regardless of the agent type; sandboxes created without --pi would
+    // otherwise miss the .pi mount and Pi sessions would have no config).
+    {
         let home_dir = dirs::home_dir().context("Failed to get home directory")?;
         let pi_dir = home_dir.join(".pi");
         let agent_dir = pi_dir.join("agent");
