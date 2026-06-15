@@ -5,6 +5,10 @@
 #   LLAMA_MODEL  — path to the .gguf model file
 #   LLAMA_USER   — user account the service runs as (default: current user)
 #   LLAMA_PORT   — port to bind (default: 6969)
+#   LLAMA_TEMP   — sampling temperature (default: 0.6)
+#   LLAMA_TOP_P  — top-p sampling (default: 0.95)
+#   LLAMA_TOP_K  — top-k sampling (default: 40)
+#   LLAMA_MIN_P  — min-p sampling (default: 0.05)
 #
 # Usage:
 #   ./scripts/setup-llama-server.sh                          # install and enable
@@ -21,6 +25,10 @@ LLAMA_MTP="${LLAMA_MTP:-true}"   # set false for non-MTP models
 LLAMA_USER="${LLAMA_USER:-$(whoami)}"
 LLAMA_PORT="${LLAMA_PORT:-6969}"
 LLAMA_BIN="${LLAMA_BIN:-/usr/bin/llama-server}"
+LLAMA_TEMP="${LLAMA_TEMP:-0.6}"
+LLAMA_TOP_P="${LLAMA_TOP_P:-0.95}"
+LLAMA_TOP_K="${LLAMA_TOP_K:-40}"
+LLAMA_MIN_P="${LLAMA_MIN_P:-0.05}"
 
 SERVICE_DIR="/etc/systemd/system"
 SERVICE_NAME="llama-server"
@@ -66,10 +74,11 @@ fi
 
 # ── Create service ────────────────────────────────────────────────────────────
 echo -e "${BOLD}Installing llama-server service…${NC}"
-echo "  Model: $LLAMA_MODEL"
-echo "  MTP:   $LLAMA_MTP"
-echo "  User:  $LLAMA_USER"
-echo "  Port:  $LLAMA_PORT"
+echo "  Model:  $LLAMA_MODEL"
+echo "  MTP:    $LLAMA_MTP"
+echo "  User:   $LLAMA_USER"
+echo "  Port:   $LLAMA_PORT"
+echo "  Temp:   $LLAMA_TEMP  Top-P: $LLAMA_TOP_P  Top-K: $LLAMA_TOP_K  Min-P: $LLAMA_MIN_P"
 
 # Escape single quotes in the chat-template-kwargs JSON for the ExecStart line
 CHAT_TEMPLATE_KWARGS='{"enable_thinking":false}'
@@ -96,10 +105,10 @@ ExecStart=$LLAMA_BIN \
     -ub 4096 \
     $NP_FLAG \
     $MTP_FLAGS \
-    --temp 0.6 \
-    --top-p 0.95 \
-    --top-k 40 \
-    --min-p 0.05 \
+    --temp $LLAMA_TEMP \
+    --top-p $LLAMA_TOP_P \
+    --top-k $LLAMA_TOP_K \
+    --min-p $LLAMA_MIN_P \
     --repeat-penalty 1.0 \
     --chat-template-kwargs '$CHAT_TEMPLATE_KWARGS'
 Restart=always

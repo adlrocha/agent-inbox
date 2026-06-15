@@ -907,6 +907,9 @@ fn main() -> Result<()> {
                     let models = lm::list_models(&cfg.lm)?;
                     lm::print_list(&models);
                 }
+                LmAction::Use { model } => {
+                    lm::use_model(&cfg.lm, &model)?;
+                }
             }
         }
     }

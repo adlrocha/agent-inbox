@@ -1,5 +1,5 @@
 use crate::config::LmConfig;
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 
 pub struct ModelEntry {
@@ -156,4 +156,170 @@ fn expand_home(s: &str) -> PathBuf {
     } else {
         PathBuf::from(s)
     }
+}
+
+// ── Model profiles ────────────────────────────────────────────────────────────
+
+/// Per-model sampling overrides loaded from `profiles.toml` in the model dir.
+#[derive(Debug, Default)]
+struct ModelProfile {
+    mtp: Option<bool>,
+    temp: Option<f32>,
+    top_p: Option<f32>,
+    top_k: Option<u32>,
+    min_p: Option<f32>,
+}
+
+/// Parse a minimal TOML profiles file.
+///
+/// Format:
+/// ```toml
+/// [gemma-4-26B]
+/// temp = 1.0
+/// top_k = 64
+/// mtp = false
+/// ```
+/// The section name is matched case-insensitively as a substring of the filename.
+fn load_profile(model_dir: &Path, model_name: &str) -> ModelProfile {
+    let profiles_path = model_dir.join("profiles.toml");
+    let Ok(src) = std::fs::read_to_string(&profiles_path) else {
+        return ModelProfile::default();
+    };
+
+    let lower_name = model_name.to_lowercase();
+    let mut profile = ModelProfile::default();
+    let mut in_section = false;
+
+    for line in src.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            let key = &trimmed[1..trimmed.len() - 1];
+            in_section = lower_name.contains(&key.to_lowercase());
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        let Some((k, v)) = trimmed.split_once('=') else {
+            continue;
+        };
+        let (k, v) = (k.trim(), v.trim());
+        match k {
+            "mtp" => profile.mtp = v.parse().ok(),
+            "temp" => profile.temp = v.parse().ok(),
+            "top_p" => profile.top_p = v.parse().ok(),
+            "top_k" => profile.top_k = v.parse().ok(),
+            "min_p" => profile.min_p = v.parse().ok(),
+            _ => {}
+        }
+    }
+    profile
+}
+
+// ── Switch active model ───────────────────────────────────────────────────────
+
+/// Find a model by partial name match, update the systemd service, and restart it.
+pub fn use_model(cfg: &LmConfig, query: &str) -> Result<()> {
+    let models = list_models(cfg)?;
+    if models.is_empty() {
+        bail!("No .gguf models found. Check [lm] model_dirs in ~/.nibble/config.toml");
+    }
+
+    let lower_query = query.to_lowercase();
+    let matches: Vec<&ModelEntry> = models
+        .iter()
+        .filter(|e| {
+            e.path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.to_lowercase().contains(&lower_query))
+                .unwrap_or(false)
+        })
+        .collect();
+
+    let entry = match matches.len() {
+        0 => {
+            eprintln!("No model matching {:?}. Available models:", query);
+            print_list(&models);
+            bail!("No match found");
+        }
+        1 => matches[0],
+        _ => {
+            eprintln!("Ambiguous query {:?} — matched:", query);
+            for m in &matches {
+                eprintln!(
+                    "  {}",
+                    m.path.file_name().and_then(|n| n.to_str()).unwrap_or("?")
+                );
+            }
+            bail!("Narrow your query to match exactly one model");
+        }
+    };
+
+    let model_path = entry.path.to_string_lossy();
+    let model_name = entry
+        .path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    let model_dir = entry.path.parent().unwrap_or(Path::new("."));
+
+    // Load per-model profile (sampling overrides).
+    let profile = load_profile(model_dir, model_name);
+
+    // MTP: profile wins, else auto-detect from filename.
+    let is_mtp = profile.mtp.unwrap_or(entry.is_mtp);
+
+    let script = locate_setup_script()?;
+
+    println!("Switching to: {}", model_name);
+    println!(
+        "  MTP: {}  temp: {}  top_p: {}  top_k: {}  min_p: {}",
+        is_mtp,
+        profile.temp.unwrap_or(0.6),
+        profile.top_p.unwrap_or(0.95),
+        profile.top_k.unwrap_or(40),
+        profile.min_p.unwrap_or(0.05),
+    );
+
+    let status = std::process::Command::new("bash")
+        .arg(&script)
+        .env("LLAMA_MODEL", model_path.as_ref())
+        .env("LLAMA_MTP", if is_mtp { "true" } else { "false" })
+        .env("LLAMA_TEMP", profile.temp.unwrap_or(0.6).to_string())
+        .env("LLAMA_TOP_P", profile.top_p.unwrap_or(0.95).to_string())
+        .env("LLAMA_TOP_K", profile.top_k.unwrap_or(40).to_string())
+        .env("LLAMA_MIN_P", profile.min_p.unwrap_or(0.05).to_string())
+        .status()
+        .with_context(|| format!("Failed to run {}", script.display()))?;
+
+    if !status.success() {
+        bail!("setup-llama-server.sh exited with status {}", status);
+    }
+    Ok(())
+}
+
+/// Locate setup-llama-server.sh relative to the nibble repo or PATH.
+fn locate_setup_script() -> Result<PathBuf> {
+    // Try relative to the nibble repo (the binary lives in target/…/nibble).
+    // Walk up from the binary location looking for scripts/setup-llama-server.sh.
+    if let Ok(exe) = std::env::current_exe() {
+        let mut dir = exe.parent();
+        while let Some(d) = dir {
+            let candidate = d.join("scripts/setup-llama-server.sh");
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+            dir = d.parent();
+        }
+    }
+    // Fallback: check a well-known install path.
+    let fallback = PathBuf::from("/nibble/scripts/setup-llama-server.sh");
+    if fallback.exists() {
+        return Ok(fallback);
+    }
+    bail!(
+        "setup-llama-server.sh not found. \
+         Run from the nibble repo or ensure /nibble/scripts/setup-llama-server.sh exists."
+    );
 }

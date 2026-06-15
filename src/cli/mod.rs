@@ -104,6 +104,15 @@ pub enum Commands {
 pub enum LmAction {
     /// List all .gguf model files found in configured model directories
     List,
+
+    /// Switch the active model and restart llama-server
+    ///
+    /// Accepts a partial model name (e.g. "gemma", "Qwen3").
+    /// Sampling parameters are read from profiles.toml in the model directory.
+    Use {
+        /// Partial or full filename of the .gguf model to activate
+        model: String,
+    },
 }
 
 #[derive(Subcommand)]
