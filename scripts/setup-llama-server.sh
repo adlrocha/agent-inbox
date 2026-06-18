@@ -9,6 +9,7 @@
 #   LLAMA_TOP_P  — top-p sampling (default: 0.95)
 #   LLAMA_TOP_K  — top-k sampling (default: 40)
 #   LLAMA_MIN_P  — min-p sampling (default: 0.05)
+#   LLAMA_THINK  — enable chat-template thinking mode (default: false)
 #
 # Usage:
 #   ./scripts/setup-llama-server.sh                          # install and enable
@@ -22,6 +23,7 @@ set -e
 # and set LLAMA_MTP=true if it's an MTP model (adds --spec-type draft-mtp flags).
 LLAMA_MODEL="${LLAMA_MODEL:-/home/adlrocha/workspace/llm-models/Qwen3.6-35B-A3B-Q8_0.gguf}"
 LLAMA_MTP="${LLAMA_MTP:-true}"   # set false for non-MTP models
+LLAMA_THINK="${LLAMA_THINK:-false}"  # set true for thinking/reasoning models (e.g. gemma-4 coder)
 LLAMA_USER="${LLAMA_USER:-$(whoami)}"
 LLAMA_PORT="${LLAMA_PORT:-6969}"
 LLAMA_BIN="${LLAMA_BIN:-/usr/bin/llama-server}"
@@ -76,12 +78,17 @@ fi
 echo -e "${BOLD}Installing llama-server service…${NC}"
 echo "  Model:  $LLAMA_MODEL"
 echo "  MTP:    $LLAMA_MTP"
+echo "  Think:  $LLAMA_THINK"
 echo "  User:   $LLAMA_USER"
 echo "  Port:   $LLAMA_PORT"
 echo "  Temp:   $LLAMA_TEMP  Top-P: $LLAMA_TOP_P  Top-K: $LLAMA_TOP_K  Min-P: $LLAMA_MIN_P"
 
 # Escape single quotes in the chat-template-kwargs JSON for the ExecStart line
-CHAT_TEMPLATE_KWARGS='{"enable_thinking":false}'
+if [ "$LLAMA_THINK" = "true" ]; then
+    CHAT_TEMPLATE_KWARGS='{"enable_thinking":true}'
+else
+    CHAT_TEMPLATE_KWARGS='{"enable_thinking":false}'
+fi
 
 sudo tee "$SERVICE_FILE" > /dev/null << EOF
 [Unit]

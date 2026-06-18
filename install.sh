@@ -422,6 +422,13 @@ cp "$REPO_DIR/scripts/privacy-proxy.py" "$HOME/.nibble/privacy-proxy.py"
 chmod +x "$HOME/.nibble/privacy-proxy.py"
 ok "privacy-proxy.py → $HOME/.nibble/privacy-proxy.py"
 
+# Stage llama-server script + model profiles so `nibble lm use` can find them
+# from the installed binary in ~/.local/bin (outside the repo tree).
+cp "$REPO_DIR/scripts/setup-llama-server.sh" "$HOME/.nibble/setup-llama-server.sh"
+chmod +x "$HOME/.nibble/setup-llama-server.sh"
+cp "$REPO_DIR/scripts/llm-model-profiles.toml" "$HOME/.nibble/llm-model-profiles.toml"
+ok "llama-server script + profiles → $HOME/.nibble/"
+
 # Check Python + dependencies
 if command -v python3 >/dev/null 2>&1; then
     ok "python3 found"

@@ -164,6 +164,7 @@ fn expand_home(s: &str) -> PathBuf {
 #[derive(Debug, Default)]
 struct ModelProfile {
     mtp: Option<bool>,
+    think: Option<bool>,
     temp: Option<f32>,
     top_p: Option<f32>,
     top_k: Option<u32>,
@@ -178,16 +179,37 @@ struct ModelProfile {
 /// temp = 1.0
 /// top_k = 64
 /// mtp = false
+/// think = true
 /// ```
 /// The section name is matched case-insensitively as a substring of the filename.
+///
+/// Profiles are layered: the repo-shipped `scripts/llm-model-profiles.toml`
+/// (committed, pulled with `git pull`) provides the defaults, and an optional
+/// `profiles.toml` in the model directory overrides them field-by-field. This
+/// lets the common profiles live in the nibble repo while a host can still
+/// tweak sampling locally without editing tracked files.
 fn load_profile(model_dir: &Path, model_name: &str) -> ModelProfile {
-    let profiles_path = model_dir.join("profiles.toml");
-    let Ok(src) = std::fs::read_to_string(&profiles_path) else {
-        return ModelProfile::default();
-    };
-
-    let lower_name = model_name.to_lowercase();
     let mut profile = ModelProfile::default();
+
+    // 1. Repo-shipped defaults (lowest priority).
+    if let Ok(repo_profiles) = locate_repo_profiles() {
+        if let Ok(src) = std::fs::read_to_string(&repo_profiles) {
+            apply_profile(&mut profile, &src, model_name);
+        }
+    }
+
+    // 2. Per-model-dir overrides (highest priority).
+    if let Ok(src) = std::fs::read_to_string(model_dir.join("profiles.toml")) {
+        apply_profile(&mut profile, &src, model_name);
+    }
+
+    profile
+}
+
+/// Merge any sections of `src` that match `model_name` onto `profile`.
+/// Later matching sections (and later sources) override earlier fields.
+fn apply_profile(profile: &mut ModelProfile, src: &str, model_name: &str) {
+    let lower_name = model_name.to_lowercase();
     let mut in_section = false;
 
     for line in src.lines() {
@@ -205,15 +227,36 @@ fn load_profile(model_dir: &Path, model_name: &str) -> ModelProfile {
         };
         let (k, v) = (k.trim(), v.trim());
         match k {
-            "mtp" => profile.mtp = v.parse().ok(),
-            "temp" => profile.temp = v.parse().ok(),
-            "top_p" => profile.top_p = v.parse().ok(),
-            "top_k" => profile.top_k = v.parse().ok(),
-            "min_p" => profile.min_p = v.parse().ok(),
+            "mtp" => profile.mtp = v.parse().ok().or(profile.mtp),
+            "think" => profile.think = v.parse().ok().or(profile.think),
+            "temp" => profile.temp = v.parse().ok().or(profile.temp),
+            "top_p" => profile.top_p = v.parse().ok().or(profile.top_p),
+            "top_k" => profile.top_k = v.parse().ok().or(profile.top_k),
+            "min_p" => profile.min_p = v.parse().ok().or(profile.min_p),
             _ => {}
         }
     }
-    profile
+}
+
+/// Locate the shipped model profiles. Prefers the install-time copy in
+/// `~/.nibble/` (staged by install.sh), then falls back to the file next to
+/// the setup script in the repo (for running directly from a checkout).
+fn locate_repo_profiles() -> Result<PathBuf> {
+    let installed = expand_home("~/.nibble/llm-model-profiles.toml");
+    if installed.exists() {
+        return Ok(installed);
+    }
+    let script = locate_setup_script()?;
+    let dir = script.parent().context("setup script has no parent dir")?;
+    let candidate = dir.join("llm-model-profiles.toml");
+    if candidate.exists() {
+        return Ok(candidate);
+    }
+    bail!(
+        "No model profiles found ({} or {})",
+        installed.display(),
+        candidate.display()
+    );
 }
 
 // ── Switch active model ───────────────────────────────────────────────────────
@@ -269,13 +312,16 @@ pub fn use_model(cfg: &LmConfig, query: &str) -> Result<()> {
 
     // MTP: profile wins, else auto-detect from filename.
     let is_mtp = profile.mtp.unwrap_or(entry.is_mtp);
+    // Thinking mode: profile wins, else off (script default).
+    let think = profile.think.unwrap_or(false);
 
     let script = locate_setup_script()?;
 
     println!("Switching to: {}", model_name);
     println!(
-        "  MTP: {}  temp: {}  top_p: {}  top_k: {}  min_p: {}",
+        "  MTP: {}  think: {}  temp: {}  top_p: {}  top_k: {}  min_p: {}",
         is_mtp,
+        think,
         profile.temp.unwrap_or(0.6),
         profile.top_p.unwrap_or(0.95),
         profile.top_k.unwrap_or(40),
@@ -286,6 +332,7 @@ pub fn use_model(cfg: &LmConfig, query: &str) -> Result<()> {
         .arg(&script)
         .env("LLAMA_MODEL", model_path.as_ref())
         .env("LLAMA_MTP", if is_mtp { "true" } else { "false" })
+        .env("LLAMA_THINK", if think { "true" } else { "false" })
         .env("LLAMA_TEMP", profile.temp.unwrap_or(0.6).to_string())
         .env("LLAMA_TOP_P", profile.top_p.unwrap_or(0.95).to_string())
         .env("LLAMA_TOP_K", profile.top_k.unwrap_or(40).to_string())
@@ -301,6 +348,13 @@ pub fn use_model(cfg: &LmConfig, query: &str) -> Result<()> {
 
 /// Locate setup-llama-server.sh relative to the nibble repo or PATH.
 fn locate_setup_script() -> Result<PathBuf> {
+    // Prefer the install-time copy staged by install.sh — the installed binary
+    // lives in ~/.local/bin, outside the repo, so the repo-relative walk below
+    // won't find it on a normal install.
+    let installed = expand_home("~/.nibble/setup-llama-server.sh");
+    if installed.exists() {
+        return Ok(installed);
+    }
     // Try relative to the nibble repo (the binary lives in target/…/nibble).
     // Walk up from the binary location looking for scripts/setup-llama-server.sh.
     if let Ok(exe) = std::env::current_exe() {
