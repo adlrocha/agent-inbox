@@ -159,20 +159,16 @@ pub fn start_proxy(config: &PrivacyFilterConfig) -> Result<()> {
     if let Some(stdout) = child.stdout.take() {
         std::thread::spawn(move || {
             let reader = std::io::BufReader::new(stdout);
-            for line in reader.lines() {
-                if let Ok(l) = line {
-                    let _ = writeln!(stdout_file, "{}", l);
-                }
+            for l in reader.lines().map_while(Result::ok) {
+                let _ = writeln!(stdout_file, "{}", l);
             }
         });
     }
     if let Some(stderr) = child.stderr.take() {
         std::thread::spawn(move || {
             let reader = std::io::BufReader::new(stderr);
-            for line in reader.lines() {
-                if let Ok(l) = line {
-                    let _ = writeln!(stderr_file, "{}", l);
-                }
+            for l in reader.lines().map_while(Result::ok) {
+                let _ = writeln!(stderr_file, "{}", l);
             }
         });
     }

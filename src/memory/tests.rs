@@ -60,10 +60,6 @@ impl MemoryTestEnv {
     fn lessons_dir(&self) -> PathBuf {
         self.base.join("lessons")
     }
-
-    fn sessions_dir(&self) -> PathBuf {
-        self.base.join("sessions")
-    }
 }
 
 // Helper to create a memory file and return its path + memory_id
@@ -74,7 +70,6 @@ fn write_test_memory(
     project: Option<&str>,
     tags: &[&str],
 ) -> (PathBuf, String) {
-    use serde_json::json;
     let id = uuid::Uuid::new_v4().to_string();
     let short = &id[..8];
     let now = Utc::now();
@@ -239,7 +234,7 @@ fn inv3_truncate_long_content() {
     let long_content: String = "x".repeat(5000);
     // Test the truncate_content function directly via store
     // We'll exercise it by writing a memory with long content and reading it back
-    let env = MemoryTestEnv::new();
+    let _env = MemoryTestEnv::new();
 
     // Manually test truncation logic (the store module truncates at write time)
     // We can't easily call store::write_memory without the real memory_dir, so
@@ -332,15 +327,16 @@ fn inv5_index_rebuildable_from_files() {
     let env = MemoryTestEnv::new();
 
     // Write 3 memory files directly
-    let (p1, id1) = write_test_memory(
+    let (_p1, id1) = write_test_memory(
         &env,
         "alpha decision",
         "decision",
         Some("proj-a"),
         &["rust"],
     );
-    let (p2, id2) = write_test_memory(&env, "beta observation", "observation", Some("proj-b"), &[]);
-    let (p3, id3) = write_test_memory(&env, "gamma pattern", "pattern", None, &["db"]);
+    let (_p2, id2) =
+        write_test_memory(&env, "beta observation", "observation", Some("proj-b"), &[]);
+    let (_p3, id3) = write_test_memory(&env, "gamma pattern", "pattern", None, &["db"]);
 
     // Count files in memories dir
     let count = fs::read_dir(env.memories_dir())
@@ -424,7 +420,7 @@ fn inv7_project_populated_search_unrestricted() {
 fn inv8_lesson_active_to_resolved() {
     let env = MemoryTestEnv::new();
 
-    let (path, id) = write_test_lesson(&env, "test lesson", "impl_bug", "medium", "active", None);
+    let (path, _id) = write_test_lesson(&env, "test lesson", "impl_bug", "medium", "active", None);
 
     // Simulate resolution: update the file
     let content = fs::read_to_string(&path).unwrap();
@@ -443,7 +439,7 @@ fn inv8_lesson_active_to_resolved() {
 fn inv8_lesson_resolved_never_goes_back() {
     // INV-8: transitions only go active → resolved/encoded
     // The reverse is forbidden. Verify the valid set.
-    let valid_from_active = vec!["resolved", "encoded"];
+    let valid_from_active = ["resolved", "encoded"];
     let forbidden = vec![
         ("resolved", "active"),
         ("encoded", "active"),
@@ -494,7 +490,7 @@ fn inv10_gitignore_excludes_required_paths() {
 #[test]
 fn ac1_write_creates_md_with_frontmatter() {
     let env = MemoryTestEnv::new();
-    let (path, id) = write_test_memory(
+    let (path, _id) = write_test_memory(
         &env,
         "Chose SQLite over flat files",
         "decision",
@@ -655,7 +651,7 @@ fn ac6_show_full_content() {
 #[test]
 fn ac9_lesson_add_creates_file() {
     let env = MemoryTestEnv::new();
-    let (path, id) = write_test_lesson(
+    let (path, _id) = write_test_lesson(
         &env,
         "Always check error types before unwrap",
         "impl_bug",
@@ -1059,7 +1055,7 @@ fn mutation_confidence_clamped() {
     let raw = 1.5f32;
     let clamped = raw.clamp(0.0, 1.0);
     assert!(
-        clamped <= 1.0 && clamped >= 0.0,
+        (0.0..=1.0).contains(&clamped),
         "MUT: confidence must be clamped to [0.0, 1.0]"
     );
 

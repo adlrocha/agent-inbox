@@ -27,6 +27,18 @@ pub fn validate_schedule(schedule: &str) -> Result<()> {
     Ok(())
 }
 
+/// Parsed fields of a cron job definition:
+/// `(schedule, prompt, label, enabled, skip_if_running, expires_at, repo_path)`.
+type ParsedCron = (
+    String,
+    String,
+    Option<String>,
+    bool,
+    bool,
+    Option<DateTime<Utc>>,
+    Option<String>,
+);
+
 /// Parse a cron job definition from markdown content
 ///
 /// Expected format:
@@ -46,17 +58,7 @@ pub fn validate_schedule(schedule: &str) -> Result<()> {
 /// ```
 ///
 /// Returns `(schedule, prompt, label, enabled, skip_if_running, expires_at, repo_path)`
-pub fn parse_cron_markdown(
-    content: &str,
-) -> Result<(
-    String,
-    String,
-    Option<String>,
-    bool,
-    bool,
-    Option<DateTime<Utc>>,
-    Option<String>,
-)> {
+pub fn parse_cron_markdown(content: &str) -> Result<ParsedCron> {
     let mut label = None;
     let mut schedule = None;
     let mut repo_path: Option<String> = None;

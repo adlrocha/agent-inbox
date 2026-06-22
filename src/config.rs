@@ -20,6 +20,9 @@ pub struct Config {
     pub pi: PiConfig,
 
     #[serde(default)]
+    pub claude: ClaudeConfig,
+
+    #[serde(default)]
     pub privacy_filter: PrivacyFilterConfig,
 
     #[serde(default)]
@@ -141,6 +144,30 @@ impl Default for PiConfig {
     fn default() -> Self {
         Self {
             install_on_spawn: default_pi_install_on_spawn(),
+        }
+    }
+}
+
+/// Controls how Claude Code is kept up to date inside a nibble sandbox.
+///
+/// Claude is baked into the sandbox image at build time, so without this it
+/// stays frozen at whatever version the image was built with. When enabled,
+/// `claude update` runs on every spawn to pull the latest release.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeConfig {
+    /// If true, run `claude update` on every Claude sandbox spawn.
+    #[serde(default = "default_claude_update_on_spawn")]
+    pub update_on_spawn: bool,
+}
+
+fn default_claude_update_on_spawn() -> bool {
+    true
+}
+
+impl Default for ClaudeConfig {
+    fn default() -> Self {
+        Self {
+            update_on_spawn: default_claude_update_on_spawn(),
         }
     }
 }
@@ -687,6 +714,30 @@ install_on_spawn = false
     fn test_pi_config_absent_defaults() {
         let config: Config = toml::from_str("").unwrap();
         assert!(config.pi.install_on_spawn);
+    }
+
+    // ── ClaudeConfig tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_claude_config_default() {
+        let cfg = ClaudeConfig::default();
+        assert!(cfg.update_on_spawn);
+    }
+
+    #[test]
+    fn test_claude_config_parse_disabled() {
+        let toml_str = r#"
+[claude]
+update_on_spawn = false
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(!config.claude.update_on_spawn);
+    }
+
+    #[test]
+    fn test_claude_config_absent_defaults() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.claude.update_on_spawn);
     }
 
     // ── PrivacyFilterConfig tests ───────────────────────────────────────────

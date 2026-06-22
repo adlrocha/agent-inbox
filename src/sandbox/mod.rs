@@ -6,7 +6,7 @@
 
 use crate::models::{SandboxConfig, SandboxType};
 use anyhow::Result;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub mod podman;
 
@@ -69,7 +69,7 @@ pub trait Sandbox: Send + Sync {
     fn spawn(
         &self,
         task_id: &str,
-        repo_path: &PathBuf,
+        repo_path: &Path,
         config: &SandboxConfig,
     ) -> Result<ContainerInfo>;
 

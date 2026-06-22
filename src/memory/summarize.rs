@@ -101,7 +101,7 @@ fn summarize_from_events(task_id: &str, events: &[CaptureEvent], force: bool) ->
     // Resolve agent type: prefer env var, fall back to task DB record
     let mut agent = std::env::var("NIBBLE_AGENT_TYPE").unwrap_or_else(|_| "unknown".to_string());
     if agent == "unknown" {
-        if let Ok(db) = crate::db::Database::open(&crate::db::default_db_path()) {
+        if let Ok(db) = crate::db::Database::open(crate::db::default_db_path()) {
             if let Ok(Some(task)) = db.get_task_by_id(task_id) {
                 agent = task.agent_type.as_str().to_string();
             }

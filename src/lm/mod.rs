@@ -101,10 +101,9 @@ pub fn print_list(entries: &[ModelEntry]) {
         .max(10);
 
     println!(
-        "  {:<width$}  {:>8}  {}",
+        "  {:<width$}  {:>8}  FLAGS",
         "MODEL",
         "SIZE",
-        "FLAGS",
         width = name_width
     );
     println!("  {}  --------  -----", "-".repeat(name_width));
@@ -150,9 +149,9 @@ fn format_size(bytes: u64) -> String {
 }
 
 fn expand_home(s: &str) -> PathBuf {
-    if s.starts_with("~/") {
+    if let Some(rest) = s.strip_prefix("~/") {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home).join(&s[2..])
+        PathBuf::from(home).join(rest)
     } else {
         PathBuf::from(s)
     }

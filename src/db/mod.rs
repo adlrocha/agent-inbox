@@ -615,6 +615,14 @@ impl Database {
         Ok(tasks)
     }
 
+    /// Delete a single task by its `task_id`. Returns true if a row was removed.
+    pub fn delete_task_by_id(&self, task_id: &str) -> Result<bool> {
+        let deleted = self
+            .conn
+            .execute("DELETE FROM tasks WHERE task_id = ?1", params![task_id])?;
+        Ok(deleted > 0)
+    }
+
     /// Delete sandbox tasks that have been exited for longer than `days`.
     /// Returns the number of tasks deleted.
     pub fn delete_exited_sandbox_tasks_older_than(&self, days: i64) -> Result<usize> {
@@ -1023,6 +1031,27 @@ mod tests {
         assert_eq!(retrieved.status, TaskStatus::Completed);
     }
 
+    #[test]
+    fn test_delete_task_by_id() {
+        let (db, _temp) = create_test_db();
+
+        let task = Task::new(
+            "test-del".to_string(),
+            AgentType::ClaudeCode,
+            "Test task".to_string(),
+            None,
+            None,
+        );
+        db.insert_task(&task).unwrap();
+
+        // Deleting an existing task returns true and removes it.
+        assert!(db.delete_task_by_id("test-del").unwrap());
+        assert!(db.get_task_by_id("test-del").unwrap().is_none());
+
+        // Deleting a non-existent task returns false.
+        assert!(!db.delete_task_by_id("does-not-exist").unwrap());
+    }
+
     /// AC-5: DB round-trip for AgentType::Pi
     #[test]
     fn test_ac5_agent_type_pi_db_round_trip() {
@@ -1215,7 +1244,7 @@ mod tests {
     fn test_list_sandbox_tasks_filters_non_sandbox() {
         let (db, _temp) = create_test_db();
 
-        let mut plain = Task::new(
+        let plain = Task::new(
             "plain".into(),
             AgentType::ClaudeCode,
             "plain".into(),

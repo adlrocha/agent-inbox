@@ -78,7 +78,7 @@ pub fn handle_search(
     limit: Option<usize>,
     semantic: bool,
 ) -> Result<()> {
-    let mt = memory_type.map(|s| MemoryType::from_str_lossy(s));
+    let mt = memory_type.map(MemoryType::from_str_lossy);
 
     let results = if semantic {
         // Semantic search is Phase 3; for now, fall back to keyword
@@ -128,7 +128,7 @@ pub fn handle_list(
     since: Option<&str>,
     limit: Option<usize>,
 ) -> Result<()> {
-    let mt = memory_type.map(|s| MemoryType::from_str_lossy(s));
+    let mt = memory_type.map(MemoryType::from_str_lossy);
     let since_dt = since.and_then(|s| {
         chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
             .ok()
@@ -510,7 +510,7 @@ pub fn handle_config() -> Result<()> {
     if m.sync.remote.is_empty() {
         println!("  Remote:            (not configured — local-only)");
         println!();
-        println!("  {}", "⚠ No remote configured. Memories stay local.",);
+        println!("  ⚠ No remote configured. Memories stay local.",);
         println!("     Set up sync with:");
         println!("       1. Create a private repo on GitHub/GitLab");
         println!("       2. Edit ~/.nibble/config.toml:");
@@ -539,20 +539,17 @@ pub fn handle_config() -> Result<()> {
                 .args(["-C", &base.to_string_lossy()])
                 .args(["remote", "-v"])
                 .output();
-            match remote_output {
-                Ok(o) => {
-                    let stdout = String::from_utf8_lossy(&o.stdout);
-                    if stdout.trim().is_empty() {
-                        println!("  ⚠ Remote in config.toml but not set in git repo.");
-                        println!("    Run: nibble memory sync");
-                    } else {
-                        println!("  Git remote:");
-                        for line in stdout.lines().take(2) {
-                            println!("    {}", line);
-                        }
+            if let Ok(o) = remote_output {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                if stdout.trim().is_empty() {
+                    println!("  ⚠ Remote in config.toml but not set in git repo.");
+                    println!("    Run: nibble memory sync");
+                } else {
+                    println!("  Git remote:");
+                    for line in stdout.lines().take(2) {
+                        println!("    {}", line);
                     }
                 }
-                Err(_) => {}
             }
         }
     }
@@ -902,8 +899,8 @@ pub fn handle_lessons(
     severity: Option<&str>,
     limit: Option<usize>,
 ) -> Result<()> {
-    let st = status.map(|s| LessonStatus::from_str_lossy(s));
-    let sev = severity.map(|s| LessonSeverity::from_str_lossy(s));
+    let st = status.map(LessonStatus::from_str_lossy);
+    let sev = severity.map(LessonSeverity::from_str_lossy);
 
     let lessons = if let Some(ctx) = context {
         search::search_lessons_by_context(ctx, st.as_ref(), limit)?

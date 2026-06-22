@@ -136,14 +136,14 @@ pub fn run(db: &Database, config: &TelegramConfig) -> Result<()> {
                 let _ = fresh_db.kv_set(POLL_OFFSET_KEY, &offset.to_string());
 
                 poll_count += 1;
-                if poll_count % PRUNE_EVERY_N_POLLS == 0 {
+                if poll_count.is_multiple_of(PRUNE_EVERY_N_POLLS) {
                     eprintln!("[listen] Running periodic prune…");
                     if let Err(e) = crate::prune_stale_tasks(&fresh_db) {
                         eprintln!("[listen] prune error: {e:#}");
                     }
                     eprintln!("[listen] Prune done");
                 }
-                if poll_count % CRON_CHECK_EVERY_N_POLLS == 0 {
+                if poll_count.is_multiple_of(CRON_CHECK_EVERY_N_POLLS) {
                     if let Err(e) = check_and_run_cron_jobs(&fresh_db, config) {
                         eprintln!("[listen] cron error: {e:#}");
                     }
@@ -323,10 +323,8 @@ fn handle_message(msg: &serde_json::Value, config: &TelegramConfig, db: &Databas
     let trimmed = text.trim_start();
     let spawn_args = if trimmed == "/spawn" {
         Some("")
-    } else if let Some(rest) = trimmed.strip_prefix("/spawn ") {
-        Some(rest)
     } else {
-        None
+        trimmed.strip_prefix("/spawn ")
     };
     if let Some(args) = spawn_args {
         let args = args.trim();
@@ -807,7 +805,7 @@ fn inject_with_heartbeat(
 
     let elapsed = start.elapsed();
     let exit_code = exit_status.and_then(|s| s.code());
-    let success = exit_status.map_or(false, |s| s.success());
+    let success = exit_status.is_some_and(|s| s.success());
     eprintln!(
         "[listen] inject done for task {short_id} in {}s, exit={:?}",
         elapsed.as_secs(),
@@ -871,12 +869,10 @@ fn inject_with_heartbeat(
                 } else {
                     format!("❌ Agent exited with error (code {code}) after {elapsed_str}")
                 }
+            } else if let Some(out) = output {
+                format!("❌ Agent exited with error after {elapsed_str}\n\n{out}")
             } else {
-                if let Some(out) = output {
-                    format!("❌ Agent exited with error after {elapsed_str}\n\n{out}")
-                } else {
-                    format!("❌ Agent exited with error after {elapsed_str}")
-                }
+                format!("❌ Agent exited with error after {elapsed_str}")
             }
         } else if let Some(out) = output {
             // Truncate to ~3000 chars so we stay well under Telegram's 4096 limit

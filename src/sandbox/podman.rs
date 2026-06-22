@@ -11,7 +11,7 @@ use crate::sandbox::{
     container_working_dir, ContainerInfo, ContainerStatus, Sandbox, SandboxConfig,
 };
 use anyhow::{bail, Context, Result};
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::Command;
 
 /// Base prefix for container names
@@ -19,6 +19,12 @@ const CONTAINER_NAME_PREFIX: &str = "nibble";
 
 /// Podman sandbox implementation
 pub struct PodmanSandbox;
+
+impl Default for PodmanSandbox {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl PodmanSandbox {
     pub fn new() -> Self {
@@ -340,7 +346,7 @@ impl Sandbox for PodmanSandbox {
     fn spawn(
         &self,
         task_id: &str,
-        repo_path: &PathBuf,
+        repo_path: &Path,
         config: &SandboxConfig,
     ) -> Result<ContainerInfo> {
         self.ensure_image(&config.image)?;

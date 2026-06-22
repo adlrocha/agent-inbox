@@ -192,7 +192,7 @@ pub fn list_sessions_grouped(
     }
     if let Some(r) = repo_filter {
         sessions.retain(|s| {
-            s.workspace.as_ref().map_or(false, |w| w.contains(r))
+            s.workspace.as_ref().is_some_and(|w| w.contains(r))
                 || s.path.to_string_lossy().contains(r)
         });
     }
@@ -737,7 +737,7 @@ pub fn derive_agent_flags_from_session(
     let (derived_h, derived_pi) = match session.agent.as_str() {
         "hermes" => (true, false),
         "pi" => (false, true),
-        "claude" | _ => (false, false),
+        _ => (false, false),
     };
     (derived_h, derived_pi, true)
 }

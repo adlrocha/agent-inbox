@@ -154,7 +154,7 @@ fn rg_search(dir: &std::path::Path, query: &str) -> Result<Vec<std::path::PathBu
                 .filter(|l| !l.is_empty())
                 .map(std::path::PathBuf::from)
                 .collect();
-            return Ok(files);
+            Ok(files)
         }
         _ => {
             // rg not found or no matches — try grep -r

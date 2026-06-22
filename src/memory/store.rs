@@ -77,6 +77,7 @@ const MAX_CONTENT_LEN: usize = 8192;
 // ── Memory operations ────────────────────────────────────────────────────────
 
 /// Write a new memory to disk. Returns the file path.
+#[allow(clippy::too_many_arguments)]
 pub fn write_memory(
     memory_type: &MemoryType,
     content: &str,

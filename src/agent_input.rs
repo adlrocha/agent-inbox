@@ -144,7 +144,7 @@ fn spawn_inject(
             "-e",
             agent_task_id_env.as_str(),
             "-w",
-            &cwd,
+            cwd,
             container_id,
             claude,
         ])

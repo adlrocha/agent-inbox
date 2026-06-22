@@ -10,7 +10,7 @@ use crate::db::Database;
 use crate::models::task::AgentType;
 use anyhow::{Context, Result};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Archive a session by task_id.
 ///
@@ -131,7 +131,7 @@ fn find_agent_session_file(agent: &AgentType, session_id: &str) -> Option<PathBu
     }
 }
 
-fn find_claude_session(home: &PathBuf, session_id: &str) -> Option<PathBuf> {
+fn find_claude_session(home: &Path, session_id: &str) -> Option<PathBuf> {
     let projects_dir = home.join(".claude").join("projects");
     if !projects_dir.is_dir() {
         return None;
@@ -151,7 +151,7 @@ fn find_claude_session(home: &PathBuf, session_id: &str) -> Option<PathBuf> {
     None
 }
 
-fn find_pi_session(home: &PathBuf, session_id: &str) -> Option<PathBuf> {
+fn find_pi_session(home: &Path, session_id: &str) -> Option<PathBuf> {
     let sessions_dir = home.join(".pi").join("agent").join("sessions");
     if !sessions_dir.is_dir() {
         return None;

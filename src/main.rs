@@ -189,7 +189,7 @@ fn main() -> Result<()> {
                                         eprintln!(
                                             "The agent may have garbage-collected its local copy."
                                         );
-                                        eprintln!("");
+                                        eprintln!();
                                         eprintln!("Archived copy (if summarized): ~/.nibble/memory/archive/<agent>/{}.jsonl", sid);
                                         eprintln!("Capture file (if captured):     ~/.nibble/memory/capture/*/{sid}.jsonl");
                                     }
@@ -421,8 +421,8 @@ fn main() -> Result<()> {
                                 // discovery (which scans ~/.pi on the host).
                                 let host_path = if let Some(ref home) = home_dir {
                                     let home_str = home.to_string_lossy();
-                                    if p.starts_with("/home/node/") {
-                                        format!("{}/{}", home_str, &p["/home/node/".len()..])
+                                    if let Some(rest) = p.strip_prefix("/home/node/") {
+                                        format!("{}/{}", home_str, rest)
                                     } else {
                                         p.clone()
                                     }
@@ -676,32 +676,38 @@ fn main() -> Result<()> {
                     container_or_path.clone()
                 };
 
-                match resolve_sandbox_id(&db, &effective_path) {
-                    Ok(task_id) => {
-                        cmd_sandbox_attach(&db, task_id, fresh, btw, hermes, pi, session.clone())?;
-                    }
-                    Err(e) => {
-                        let looks_like_path = effective_path.starts_with('.')
-                            || effective_path.starts_with('/')
-                            || effective_path.starts_with('~')
-                            || effective_path.contains('/')
-                            || std::path::Path::new(&effective_path).exists();
+                let looks_like_path = effective_path.starts_with('.')
+                    || effective_path.starts_with('/')
+                    || effective_path.starts_with('~')
+                    || effective_path.contains('/')
+                    || std::path::Path::new(&effective_path).exists();
 
-                        if looks_like_path {
-                            eprintln!("No sandbox found for '{}', spawning one...", effective_path);
-                            let cfg = config::load().unwrap_or_default();
-                            let task_id = cmd_sandbox_spawn(
-                                &db,
-                                effective_path,
-                                None,
-                                "nibble-sandbox:latest".to_string(),
-                                fresh,
-                                None,
-                                true,
-                                cfg.factory.enabled,
-                                hermes,
-                                pi,
-                            )?;
+                // Determine whether a usable (running) sandbox already exists for the
+                // target. A resolved task whose container is dead — e.g. after `kill` or
+                // `kill --all`, which retain the task record but stop the container — must
+                // not be attached to; for path inputs we transparently re-spawn instead.
+                let running_task_id = match resolve_sandbox_id(&db, &effective_path) {
+                    Ok(task_id) => {
+                        let container_alive = db
+                            .get_task_by_id(&task_id)
+                            .ok()
+                            .flatten()
+                            .and_then(|t| t.container_id)
+                            .map(|cid| {
+                                matches!(
+                                    PodmanSandbox::new().status(&cid),
+                                    Ok(sandbox::ContainerStatus::Running)
+                                )
+                            })
+                            .unwrap_or(false);
+
+                        if container_alive {
+                            Some(task_id)
+                        } else if looks_like_path {
+                            None
+                        } else {
+                            // Non-path target (task ID / container) with a dead container:
+                            // surface the original "not running" error from attach.
                             cmd_sandbox_attach(
                                 &db,
                                 task_id,
@@ -711,11 +717,42 @@ fn main() -> Result<()> {
                                 pi,
                                 session.clone(),
                             )?;
+                            return Ok(());
+                        }
+                    }
+                    Err(e) => {
+                        if looks_like_path {
+                            None
                         } else {
                             return Err(e);
                         }
                     }
-                }
+                };
+
+                let task_id = match running_task_id {
+                    Some(id) => id,
+                    None => {
+                        eprintln!(
+                            "No running sandbox for '{}', spawning one...",
+                            effective_path
+                        );
+                        let cfg = config::load().unwrap_or_default();
+                        cmd_sandbox_spawn(
+                            &db,
+                            effective_path,
+                            None,
+                            "nibble-sandbox:latest".to_string(),
+                            fresh,
+                            None,
+                            true,
+                            cfg.factory.enabled,
+                            hermes,
+                            pi,
+                        )?
+                    }
+                };
+
+                cmd_sandbox_attach(&db, task_id, fresh, btw, hermes, pi, session.clone())?;
             }
             SandboxAction::Kill {
                 container_or_path,
@@ -1216,7 +1253,7 @@ fn delete_latest_pi_session(container_dir: &str) {
             }
             if let Ok(meta) = file.metadata() {
                 if let Ok(mtime) = meta.modified() {
-                    if newest.as_ref().map_or(true, |(_, t)| mtime > *t) {
+                    if newest.as_ref().is_none_or(|(_, t)| mtime > *t) {
                         newest = Some((path, mtime));
                     }
                 }
@@ -1303,7 +1340,7 @@ fn find_pi_session_for_cwd(container_dir: &str) -> Option<std::path::PathBuf> {
             }
             let meta = file.metadata().ok()?;
             let mtime = meta.modified().ok()?;
-            if newest.as_ref().map_or(true, |(_, t)| mtime > *t) {
+            if newest.as_ref().is_none_or(|(_, t)| mtime > *t) {
                 newest = Some((path, mtime));
             }
         }
@@ -1420,8 +1457,7 @@ fn cmd_hermes_spawn_internal(db: &Database) -> Result<String> {
         }
         if !resolved.is_empty() {
             let mounts = config::resolve_repo_mounts(&resolved);
-            let seed_data: Vec<(String, std::path::PathBuf)> =
-                mounts.into_iter().map(|(n, p)| (n, p)).collect();
+            let seed_data: Vec<(String, std::path::PathBuf)> = mounts.into_iter().collect();
             let seeded = db.seed_hermes_repos_from_config(&seed_data)?;
             if seeded > 0 {
                 println!("  Seeded {} repo(s) from config.toml", seeded);
@@ -1827,6 +1863,9 @@ fn cmd_hermes_kill(db: &Database) -> Result<()> {
 }
 
 /// Spawn a sandboxed Claude Code agent.  Returns the new task_id on success.
+// Each argument maps to a distinct CLI flag on `nibble sandbox spawn`; bundling
+// them into a struct would only move the same surface elsewhere.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn cmd_sandbox_spawn(
     db: &Database,
     repo_path: String,
@@ -2008,7 +2047,7 @@ pub(crate) fn cmd_sandbox_spawn(
         if agent_dir.is_symlink() {
             let resolved = agent_dir
                 .canonicalize()
-                .with_context(|| format!("Failed to resolve ~/.pi/agent symlink"))?;
+                .with_context(|| "Failed to resolve ~/.pi/agent symlink".to_string())?;
             std::fs::create_dir_all(&resolved)
                 .with_context(|| "Failed to create resolved ~/.pi/agent target")?;
             std::fs::create_dir_all(resolved.join("skills"))
@@ -2098,6 +2137,33 @@ pub(crate) fn cmd_sandbox_spawn(
                         "  Tools:     ⚠️  pi npm install exited non-zero (install manually inside)"
                     ),
                     Err(e) => eprintln!("  Tools:     ⚠️  pi npm install failed to run: {e}"),
+                }
+            }
+        } else {
+            // Claude install: baked into the image at build time, so refresh it
+            // to the latest release on spawn (non-fatal). Runs as the `node` user
+            // since that is who owns the ~/.local/bin/claude installation.
+            let claude_cfg = config::load().unwrap_or_default().claude;
+            if claude_cfg.update_on_spawn {
+                let status = std::process::Command::new("podman")
+                    .args([
+                        "exec",
+                        "--user",
+                        "node",
+                        &info.id,
+                        "/bin/bash",
+                        "-lc",
+                        "claude update",
+                    ])
+                    .status();
+                match status {
+                    Ok(s) if s.success() => {
+                        println!("  Tools:     claude updated to latest")
+                    }
+                    Ok(_) => eprintln!(
+                        "  Tools:     ⚠️  claude update exited non-zero (using image version)"
+                    ),
+                    Err(e) => eprintln!("  Tools:     ⚠️  claude update failed to run: {e}"),
                 }
             }
         }
@@ -2455,8 +2521,8 @@ fn cmd_cron_list(db: &Database, repo_path_filter: Option<String>) -> Result<()> 
     }
 
     println!(
-        "{:<5} {:<10} {:<20} {:<20} {:<10} {:<24} {}",
-        "ID", "REPO", "SCHEDULE", "NEXT RUN", "STATUS", "EXPIRES (UTC)", "LABEL"
+        "{:<5} {:<10} {:<20} {:<20} {:<10} {:<24} LABEL",
+        "ID", "REPO", "SCHEDULE", "NEXT RUN", "STATUS", "EXPIRES (UTC)"
     );
     println!("{}", "─".repeat(114));
 
@@ -2521,6 +2587,8 @@ fn cmd_cron_list(db: &Database, repo_path_filter: Option<String>) -> Result<()> 
     Ok(())
 }
 
+// Each argument maps to a distinct `nibble cron edit` flag.
+#[allow(clippy::too_many_arguments)]
 fn cmd_cron_edit(
     db: &Database,
     id: i64,
@@ -2655,10 +2723,7 @@ fn cmd_sandbox_list(db: &Database) -> Result<()> {
 
     let sandbox = PodmanSandbox::new();
 
-    println!(
-        "{:<20} {:<18} {:<12} {}",
-        "TASK ID", "STARTED", "STATUS", "REPO"
-    );
+    println!("{:<20} {:<18} {:<12} REPO", "TASK ID", "STARTED", "STATUS");
     println!("{}", "─".repeat(82));
 
     let mut any_gone = false;
@@ -2738,14 +2803,14 @@ fn cmd_sandbox_list(db: &Database) -> Result<()> {
     Ok(())
 }
 
-/// Resolve a user-supplied sandbox identifier to a full task_id.
-///
-/// Accepts either:
-/// - A task ID or prefix (UUID hex string)
-/// - A repo path (starts with `.`, `/`, `~`, contains a path separator, or exists as a directory)
-///
-/// For repo paths the canonical absolute path is looked up in the tasks table
-/// returning the most recently spawned sandbox for that repo.
+// Resolve a user-supplied sandbox identifier to a full task_id.
+//
+// Accepts either:
+// - A task ID or prefix (UUID hex string)
+// - A repo path (starts with `.`, `/`, `~`, contains a path separator, or exists as a directory)
+//
+// For repo paths the canonical absolute path is looked up in the tasks table
+// returning the most recently spawned sandbox for that repo.
 
 /// Resolve a user-supplied path to its canonical absolute form.
 ///
@@ -3069,7 +3134,7 @@ fn cmd_sandbox_attach(
         }
     } else {
         task.context.as_ref().and_then(|c| {
-            let raw = c.claude_session_id.as_deref().or_else(|| {
+            let raw = c.claude_session_id.as_deref().or({
                 // Legacy fallback: use generic session_id for non-hermes tasks.
                 match task.agent_type {
                     AgentType::Hermes => None,
@@ -3255,7 +3320,7 @@ fn cmd_sandbox_attach(
 
     podman_args.extend([
         "-w".into(),
-        container_dir.clone().into(),
+        container_dir.clone(),
         container_id.clone(),
         "/bin/bash".into(),
         "-c".into(),
@@ -3680,17 +3745,24 @@ pub(crate) fn prune_stale_tasks(db: &Database) -> Result<usize> {
                     }
                 }
                 SandboxHealth::Dead => {
-                    // Only transition Running → Exited (idempotency guard).
-                    if task.status == TaskStatus::Running {
-                        let mut t = task.clone();
-                        t.set_exited(None);
-                        let _ = db.update_task(&t);
-                        eprintln!(
-                            "[prune] Sandbox {} dead → exited task {}",
-                            container_name,
+                    // Container is gone for good. Remove any leftover container and
+                    // delete the task record immediately — no resume is possible once
+                    // the container no longer exists, so there is nothing to retain.
+                    let _ = sandbox.kill(container_name);
+                    match db.delete_task_by_id(&task.task_id) {
+                        Ok(true) => {
+                            eprintln!(
+                                "[prune] Sandbox {} dead → deleted task {}",
+                                container_name,
+                                &task.task_id[..8.min(task.task_id.len())]
+                            );
+                            pruned += 1;
+                        }
+                        Ok(false) => {}
+                        Err(e) => eprintln!(
+                            "[prune] Failed to delete dead task {}: {e:#}",
                             &task.task_id[..8.min(task.task_id.len())]
-                        );
-                        pruned += 1;
+                        ),
                     }
                 }
                 SandboxHealth::Degraded => {
