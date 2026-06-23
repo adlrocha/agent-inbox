@@ -500,6 +500,66 @@ else
     warn "systemd user session not available. Auto-resume on reboot won't work."
 fi
 
+# ── 5d. Token-usage tracker (systemd-user timer) ─────────────────────────────
+# Scans claude + pi session logs every 15 minutes and writes per-message
+# token counts into ~/.nibble/tasks.db. Query with `nibble usage report`.
+step "Installing token-usage tracker timer"
+
+cat > "$SYSTEMD_DIR/nibble-usage.service" << UNIT
+[Unit]
+Description=Nibble — scan Claude/pi session logs for token usage
+After=default.target
+
+[Service]
+Type=oneshot
+ExecStart=$BIN_DIR/nibble usage scan
+Environment=HOME=%h
+UNIT
+
+cat > "$SYSTEMD_DIR/nibble-usage.timer" << UNIT
+[Unit]
+Description=Run nibble usage scan every 15 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Unit=nibble-usage.service
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+if systemctl --user daemon-reload 2>/dev/null; then
+    systemctl --user enable --now nibble-usage.timer 2>/dev/null \
+        && ok "Usage scan timer enabled (every 15 min)" \
+        || warn "Could not enable nibble-usage.timer. Enable manually: systemctl --user enable --now nibble-usage.timer"
+else
+    warn "systemd user session not available. Run scans manually: nibble usage scan"
+fi
+
+# Seed the pricing override file if it doesn't exist.
+PRICING_DIR="$HOME/.nibble"
+PRICING_FILE="$PRICING_DIR/pricing.toml"
+if [ ! -f "$PRICING_FILE" ]; then
+    mkdir -p "$PRICING_DIR"
+    cat > "$PRICING_FILE" << 'PRICING'
+# nibble usage pricing overrides — USD per 1M tokens.
+# Bundled defaults exist for common Claude models; entries here override them.
+# View the effective table with `nibble usage pricing`.
+#
+# Example:
+# [anthropic."claude-opus-4-7"]
+# input = 15.0
+# output = 75.0
+# cache_read = 1.50
+# cache_write = 18.75
+#
+# Free providers (e.g. zai for glm-*) record cost=0 in pi logs by default.
+# Add pricing here if you want to estimate what they'd cost on a paid plan.
+PRICING
+    ok "Pricing override stub written: $PRICING_FILE"
+fi
+
 # ── 6. Claude Code hooks ──────────────────────────────────────────────────────
 step "Installing Claude Code hooks"
 

@@ -98,6 +98,38 @@ pub enum Commands {
         #[command(subcommand)]
         action: LmAction,
     },
+
+    /// Track token usage across Claude Code and pi sessions
+    Usage {
+        #[command(subcommand)]
+        action: UsageAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum UsageAction {
+    /// Scan local CLI session logs and upsert per-message token usage rows
+    Scan {
+        /// Print a summary after scanning
+        #[arg(long)]
+        report: bool,
+    },
+
+    /// Print aggregated token usage and estimated cost
+    Report {
+        /// Filter to recent activity, e.g. 24h, 7d, 4w
+        #[arg(long)]
+        since: Option<String>,
+        /// Group rows by: model | provider | sandbox
+        #[arg(long, default_value = "model")]
+        by: String,
+        /// Emit JSON instead of a table
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Show the effective pricing table (bundled + user overrides)
+    Pricing,
 }
 
 #[derive(Subcommand)]

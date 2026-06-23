@@ -11,6 +11,7 @@ mod notifications;
 mod privacy_filter;
 mod sandbox;
 mod session;
+mod usage;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -946,6 +947,32 @@ fn main() -> Result<()> {
                 }
                 LmAction::Use { model } => {
                     lm::use_model(&cfg.lm, &model)?;
+                }
+            }
+        }
+        Commands::Usage { action } => {
+            let pricing = usage::PricingTable::load().context("Failed to load pricing table")?;
+            match action {
+                cli::UsageAction::Scan { report } => {
+                    let stats = usage::scan_all(&db, &pricing)?;
+                    eprintln!(
+                        "claude: {}/{} new (seen/inserted),  pi: {}/{} new",
+                        stats.claude_seen, stats.claude_inserted, stats.pi_seen, stats.pi_inserted,
+                    );
+                    if report {
+                        usage::print_report(&db, "model", None, usage::ReportFormat::Table)?;
+                    }
+                }
+                cli::UsageAction::Report { since, by, json } => {
+                    let fmt = if json {
+                        usage::ReportFormat::Json
+                    } else {
+                        usage::ReportFormat::Table
+                    };
+                    usage::print_report(&db, &by, since.as_deref(), fmt)?;
+                }
+                cli::UsageAction::Pricing => {
+                    usage::print_pricing(&pricing)?;
                 }
             }
         }

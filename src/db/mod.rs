@@ -9,7 +9,7 @@ use crate::models::{
     AgentType, CronJob, SandboxConfig, SandboxType, Task, TaskContext, TaskStatus,
 };
 
-const SCHEMA_VERSION: i32 = 10;
+const SCHEMA_VERSION: i32 = 11;
 
 pub struct Database {
     conn: Connection,
@@ -132,6 +132,24 @@ impl Database {
                 created_at INTEGER NOT NULL
             );
             CREATE INDEX idx_hermes_repos_path ON hermes_repos(repo_path);
+
+            CREATE TABLE token_usage (
+                provider TEXT NOT NULL,
+                api_provider TEXT,
+                model TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                ts INTEGER NOT NULL,
+                cwd TEXT,
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+                estimated_cost_usd REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (provider, message_id)
+            );
+            CREATE INDEX idx_token_usage_ts ON token_usage(ts);
+            CREATE INDEX idx_token_usage_model ON token_usage(provider, model);
             ",
         )?;
 
@@ -290,6 +308,28 @@ impl Database {
                     created_at INTEGER NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_hermes_repos_path ON hermes_repos(repo_path);",
+            )?;
+        }
+
+        if from_version < 11 {
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS token_usage (
+                    provider TEXT NOT NULL,
+                    api_provider TEXT,
+                    model TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                    ts INTEGER NOT NULL,
+                    cwd TEXT,
+                    input_tokens INTEGER NOT NULL DEFAULT 0,
+                    output_tokens INTEGER NOT NULL DEFAULT 0,
+                    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+                    estimated_cost_usd REAL NOT NULL DEFAULT 0,
+                    PRIMARY KEY (provider, message_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_token_usage_ts ON token_usage(ts);
+                CREATE INDEX IF NOT EXISTS idx_token_usage_model ON token_usage(provider, model);",
             )?;
         }
 
@@ -951,6 +991,166 @@ impl Database {
             sandbox_config,
         })
     }
+
+    // ── token_usage ────────────────────────────────────────────────────────────
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_token_usage(
+        &self,
+        provider: &str,
+        api_provider: Option<&str>,
+        model: &str,
+        session_id: &str,
+        message_id: &str,
+        ts: i64,
+        cwd: Option<&str>,
+        input_tokens: i64,
+        output_tokens: i64,
+        cache_read_tokens: i64,
+        cache_write_tokens: i64,
+        estimated_cost_usd: f64,
+    ) -> Result<bool> {
+        let changed = self.conn.execute(
+            "INSERT OR IGNORE INTO token_usage
+                (provider, api_provider, model, session_id, message_id, ts, cwd,
+                 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                 estimated_cost_usd)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                provider,
+                api_provider,
+                model,
+                session_id,
+                message_id,
+                ts,
+                cwd,
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
+                estimated_cost_usd,
+            ],
+        )?;
+        if changed == 0 {
+            // Record already exists; refresh derived fields (especially cost)
+            // so pricing-table updates are reflected on re-scans.
+            self.conn.execute(
+                "UPDATE token_usage
+                 SET api_provider = ?,
+                     model = ?,
+                     session_id = ?,
+                     ts = ?,
+                     cwd = ?,
+                     input_tokens = ?,
+                     output_tokens = ?,
+                     cache_read_tokens = ?,
+                     cache_write_tokens = ?,
+                     estimated_cost_usd = ?
+                 WHERE provider = ? AND message_id = ?",
+                params![
+                    api_provider,
+                    model,
+                    session_id,
+                    ts,
+                    cwd,
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens,
+                    cache_write_tokens,
+                    estimated_cost_usd,
+                    provider,
+                    message_id,
+                ],
+            )?;
+        }
+        Ok(changed > 0)
+    }
+
+    /// Aggregate usage grouped by one of: "model", "provider", "sandbox" (cwd).
+    /// `since_ts` filters to ts >= since_ts; pass 0 to include all rows.
+    /// Returns earliest and latest ts among matched rows so the caller can
+    /// render the actual covered window.
+    pub fn token_usage_summary(
+        &self,
+        group_by: &str,
+        since_ts: i64,
+    ) -> Result<(Vec<TokenUsageSummaryRow>, Option<(i64, i64)>)> {
+        // (display bucket, raw model, raw api_provider) per grouping.
+        let (bucket_sql, model_sql, api_provider_sql) = match group_by {
+            "provider" => ("provider", "NULL", "NULL"),
+            "sandbox" | "cwd" => ("COALESCE(cwd, '(unknown)')", "NULL", "NULL"),
+            // default "model"
+            _ => (
+                "provider || '/' || model",
+                "MAX(model)",
+                "MAX(api_provider)",
+            ),
+        };
+        let sql = format!(
+            "SELECT {bucket_sql} AS bucket,
+                    {model_sql} AS model,
+                    {api_provider_sql} AS api_provider,
+                    SUM(input_tokens), SUM(output_tokens),
+                    SUM(cache_read_tokens), SUM(cache_write_tokens),
+                    SUM(estimated_cost_usd), COUNT(*),
+                    MAX(provider)
+             FROM token_usage
+             WHERE ts >= ?1
+             GROUP BY bucket
+             ORDER BY SUM(estimated_cost_usd) DESC, bucket"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(params![since_ts], |row| {
+                Ok(TokenUsageSummaryRow {
+                    bucket: row.get(0)?,
+                    model: row.get(1).ok(),
+                    api_provider: row.get(2).ok(),
+                    input_tokens: row.get::<_, i64>(3).unwrap_or(0),
+                    output_tokens: row.get::<_, i64>(4).unwrap_or(0),
+                    cache_read_tokens: row.get::<_, i64>(5).unwrap_or(0),
+                    cache_write_tokens: row.get::<_, i64>(6).unwrap_or(0),
+                    estimated_cost_usd: row.get::<_, f64>(7).unwrap_or(0.0),
+                    message_count: row.get::<_, i64>(8).unwrap_or(0),
+                    provider: row.get(9).unwrap_or_default(),
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        // Discover the actual ts window among matched rows.
+        let window: Option<(i64, i64)> = self
+            .conn
+            .query_row(
+                "SELECT MIN(ts), MAX(ts) FROM token_usage WHERE ts >= ?1",
+                params![since_ts],
+                |row| {
+                    let mn: Option<i64> = row.get(0)?;
+                    let mx: Option<i64> = row.get(1)?;
+                    Ok(mn.zip(mx))
+                },
+            )
+            .optional()?
+            .flatten();
+
+        Ok((rows, window))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TokenUsageSummaryRow {
+    pub bucket: String,
+    /// Raw model string when grouped by model; None for other groupings.
+    pub model: Option<String>,
+    /// Raw api_provider when grouped by model; None for other groupings.
+    pub api_provider: Option<String>,
+    /// Top-level provider ("claude" | "pi"); always populated.
+    pub provider: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub estimated_cost_usd: f64,
+    pub message_count: i64,
 }
 
 pub fn default_db_path() -> PathBuf {
