@@ -1,65 +1,59 @@
-# Skills — AI Factory Pipeline
+# Nibble Skills
 
-This directory contains the skill files for the **AI Factory pipeline** — a structured,
-chip-design-inspired development workflow built into every nibble sandbox.
+Skills shipped to every nibble sandbox (copied by `install.sh` to
+`~/.claude/skills/`, `~/.nibble/skills/`, and `~/.pi/agent/skills/`). Provenance
+and integrity are tracked in [`../skills-lock.json`](../skills-lock.json); run
+`scripts/skills-lock.sh` to regenerate and `--check` to detect drift.
 
-## 3-Tier Pipeline
+Only each skill's name + description are in the agent's system prompt
+(progressive disclosure). Full content loads on demand — so prefer few,
+well-named skills with on-demand `references/` over many top-level skills.
 
-The pipeline adapts its depth to the size and risk of each task:
+## Engineering practices (general-purpose, stack-neutral)
 
-```
-Quick:     SPEC ──▶ IMPLEMENT ──▶ VERIFY ──────────────────────── done*
-Standard:  SPEC ──▶ IMPLEMENT ──▶ VERIFY ──▶ AUDIT ───────────── done*
-Full:      SPEC ──▶ IMPLEMENT ──▶ VERIFY ──▶ AUDIT ──▶ QA GATE ─ done
+A single `engineering` skill holds universal discipline and **routes** to
+on-demand topic and stack references:
 
-* QA Gate fires for ANY tier if Audit finds unfixed Critical/High findings.
-```
+- `engineering/SKILL.md` — universal principles + the routing table.
+- `engineering/references/` — topics: `code-review`, `testing`, `debugging`,
+  `refactoring`, `interface-design`, `error-handling`, `security-basics`.
+- `engineering/references/stacks/` — currently supported stacks:
+  - `backend.md` (services, APIs, databases, jobs)
+  - `frontend.md` (web UI, components, state, a11y)
 
-| Tier | When | Stages |
-|------|------|--------|
-| **Quick** | ≤3 functions, no security/API change | Spec → Implement → Verify |
-| **Standard** | 4–15 functions | Spec → Implement → Verify → Audit |
-| **Full** | 16+ functions, security-sensitive, API changes | Full pipeline with QA Gate |
+The general skill routes to the right stack; add new stacks as
+`references/stacks/<name>.md` and list them in `SKILL.md`.
 
-## Skills
+`git-commit-pr` (vendored from `we-are-singular/skills`, MIT) is a standalone
+skill for the commit/PR workflow.
+
+## AI Factory pipeline (opt-in)
+
+A structured Spec → Implement → Verify → Audit → QA pipeline, **off by default**
+(enable with `nibble sandbox spawn --factory` or `[factory].enabled` in
+`~/.nibble/config.toml`). Ships as a single on-demand skill:
+
+- `factory-pipeline/SKILL.md` — tier classification + orchestration.
+- `factory-pipeline/references/` — `spec`, `verify`, `qa-gate`, `lessons`.
+
+## Other skills
 
 | Skill | Purpose |
 |-------|---------|
-| `factory-pipeline` | Tier classification + orchestration. Load first. |
-| `factory-spec` | Blueprint design with tiered templates (quick/standard/full). |
-| `factory-verify` | Testing + adversarial analysis + risk scoring. Merged from previous TDD, adversarial, and risk-score skills. |
-| `factory-qa-gate` | Human approval gate. Fires for Critical/High findings (any tier) or always (Full tier). |
-| `factory-lessons` | Continuous improvement log. Loaded once at pipeline start, appended at pipeline end. |
-
-## Directory layout
-
-```
-skills/
-  factory-pipeline/SKILL.md    # Pipeline manifest — load first
-  factory-spec/SKILL.md        # Spec stage (tiered templates)
-  factory-verify/SKILL.md      # Verify + Audit stages
-  factory-qa-gate/SKILL.md     # QA Gate stage
-  factory-lessons/SKILL.md     # Continuous improvement log
-```
-
-Each file is plain markdown with YAML frontmatter (`name`, `description`) for skill discovery.
-
-## Artifact locations (inside sandbox repos)
-
-```
-.nibble/factory/
-  blueprints/                   # Spec blueprints (committed)
-  reports/audit/                # Adversarial + risk findings (gitignored — stale after fixes)
-  reports/qa/                   # QA gate decisions (committed — audit trail)
-```
+| `nibble-memory` | Cross-session memory capture/search (pairs with the nibble-memory extension). |
+| `nibble-pr-review` | Track and review GitHub PRs where you're a reviewer. |
+| `fable5-emulation` | Domain-specific emulation notes. |
+| `omarchy-migration` | Arch/Omarchy migration guidance. |
 
 ## Installation
 
-`install.sh` copies all `skills/factory-*/SKILL.md` directories to `~/.claude/skills/`,
-which Claude Code scans automatically.
+`install.sh` copies each `skills/*/` directory (including its `references/`) to
+the host skill dirs above, which Claude Code and Pi scan automatically. Removed
+skills are cleaned up explicitly (see the `stale` loop in `install.sh`).
 
-## When to skip the pipeline
+## Adding a skill
 
-The pipeline is mandatory for non-trivial changes. It may be skipped (with human
-confirmation) for typo fixes, single-value config tweaks, formatting/linting changes,
-or documentation-only changes.
+1. Create `skills/<name>/SKILL.md` (frontmatter: `name`, `description`).
+2. Add on-demand depth under `references/` if needed.
+3. Add a provenance entry to `PROVENANCE` in `scripts/skills-lock.sh`.
+4. Run `scripts/skills-lock.sh` to update `skills-lock.json`.

@@ -7,7 +7,7 @@ description: AI Factory — 3-tier development pipeline. Load this first to clas
 
 ## Startup
 
-1. Load `factory-lessons` and read the lessons log.
+1. Read `references/lessons.md` for known gaps before you start.
 2. Classify the task (Quick / Standard / Full) using the criteria below.
 3. State your classification to the human. They can override.
 4. Execute stages in order per tier.
@@ -44,7 +44,7 @@ Full:      SPEC ──▶ IMPLEMENT ──▶ VERIFY ──▶ AUDIT ──▶ Q
 
 ## Stage Transitions
 
-- Load the appropriate skill at each stage: `factory-spec`, `factory-verify`, `factory-qa-gate`.
+- At each stage, read the matching reference in this skill: `references/spec.md`, `references/verify.md`, `references/qa-gate.md`.
 - Implementation guidance is inline below (no separate skill needed).
 
 ## Implementation Rules (all tiers)
@@ -79,7 +79,7 @@ For changes to **existing code** (bug fix, refactor): scope each stage to the de
 
 ## Lessons
 
-Load `factory-lessons` once at pipeline start. At pipeline end, append new lessons if something slipped through a stage.
+Read `references/lessons.md` at pipeline start. At pipeline end, append new lessons to that file if something slipped through a stage.
 
 ## Principles
 

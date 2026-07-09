@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "skills": {
+    "engineering": {
+      "source": "vendored:local",
+      "sourceType": "local",
+      "skillPath": "skills/engineering/SKILL.md",
+      "version": "unpinned",
+      "license": "proprietary",
+      "computedHash": "1e6fcaec01028e5b0cb720bd444fa20b200a1136bf1b45995792f71500043795"
+    },
+    "fable5-emulation": {
+      "source": "vendored:local",
+      "sourceType": "local",
+      "skillPath": "skills/fable5-emulation/SKILL.md",
+      "version": "unpinned",
+      "license": "proprietary",
+      "computedHash": "d44afe5e1970e09ebe074cf34ef7dd3921162e9049abfb90aefa7f29efee0d56"
+    },
+    "factory-pipeline": {
+      "source": "vendored:local",
+      "sourceType": "local",
+      "skillPath": "skills/factory-pipeline/SKILL.md",
+      "version": "unpinned",
+      "license": "proprietary",
+      "computedHash": "22169706e03b9480c0affd7b503d13a3687f20b8655fd35f8457fda3225ba9a0"
+    },
+    "git-commit-pr": {
+      "source": "we-are-singular/skills",
+      "sourceType": "github",
+      "skillPath": "skills/git-commit-pr/SKILL.md",
+      "version": "vendored-2026-07",
+      "license": "MIT",
+      "computedHash": "0346a8ca919a00d94646fe611480ea72c567a5a7c8cc079b17b269e52223e437"
+    },
+    "nibble-memory": {
+      "source": "vendored:local",
+      "sourceType": "local",
+      "skillPath": "skills/nibble-memory/SKILL.md",
+      "version": "unpinned",
+      "license": "proprietary",
+      "computedHash": "d7b338670dd3488c4875a7402456e3a8ff897a02e4d4ba0cb685ba055d7bebfa"
+    },
+    "nibble-pr-review": {
+      "source": "vendored:local",
+      "sourceType": "local",
+      "skillPath": "skills/nibble-pr-review/SKILL.md",
+      "version": "unpinned",
+      "license": "proprietary",
+      "computedHash": "f9cef1f9cd88f75781ca218ccc8e2e89dfcd0ebaf87e7fae4d502645232203bc"
+    },
+    "omarchy-migration": {
+      "source": "vendored:local",
+      "sourceType": "local",
+      "skillPath": "skills/omarchy-migration/SKILL.md",
+      "version": "unpinned",
+      "license": "proprietary",
+      "computedHash": "324da3f0d3397d1c1f2d8264c5d83a812297916f4787001426a22f120a48c082"
+    }
+  }
+}

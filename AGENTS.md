@@ -55,7 +55,7 @@ Load skill `factory-pipeline` to classify the task and determine which tier to r
 
 **QA Gate fires for ANY tier** when unfixed Critical or High findings are discovered. For Full tier, QA Gate always fires.
 
-Skills: `factory-pipeline` · `factory-spec` · `factory-verify` · `factory-qa-gate` · `factory-lessons`
+Skill: `factory-pipeline` (loads stage references on demand)
 
 ```
 .nibble/factory/blueprints/    # Feature specs (committed)

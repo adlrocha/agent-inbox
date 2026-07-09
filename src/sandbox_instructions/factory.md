@@ -3,7 +3,7 @@
 Factory pipeline skills are stored on the **host** at `~/.claude/skills/` and bind-mounted into every sandbox at `/home/node/.claude/skills/`. This means:
 
 - Skills and lessons updates made inside a sandbox are immediately visible on the host and in all other sandboxes — they share the same directory.
-- To persist a lessons-learned update, edit the skill file directly (e.g. `~/.claude/skills/factory-lessons/SKILL.md`). No restart or re-injection needed.
+- To persist a lessons-learned update, edit `~/.claude/skills/factory-pipeline/references/lessons.md` directly. No restart or re-injection needed.
 - The host `install.sh` re-installs skills from the nibble repo to `~/.claude/skills/` whenever you update them in source. Run it after editing skills in the repo.
 
 <!-- nibble:global:begin -->
@@ -18,7 +18,7 @@ Load skill `factory-pipeline` to classify the task and determine which tier to r
 
 **QA Gate fires for ANY tier** when unfixed Critical or High findings are discovered. For Full tier, QA Gate always fires.
 
-Skills: `factory-pipeline` · `factory-spec` · `factory-verify` · `factory-qa-gate` · `factory-lessons`
+Skill: `factory-pipeline` (loads stage references on demand: `references/spec.md`, `references/verify.md`, `references/qa-gate.md`, `references/lessons.md`)
 
 ```
 .nibble/factory/blueprints/    # Feature specs (committed)

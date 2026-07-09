@@ -2156,7 +2156,8 @@ pub(crate) fn cmd_sandbox_spawn(
                         "@earendil-works/pi-coding-agent",
                     ])
                     .status();
-                match status {
+                let pi_core_ok = matches!(status, Ok(s) if s.success());
+                match &status {
                     Ok(s) if s.success() => {
                         println!("  Tools:     @earendil-works/pi-coding-agent installed")
                     }
@@ -2164,6 +2165,36 @@ pub(crate) fn cmd_sandbox_spawn(
                         "  Tools:     ⚠️  pi npm install exited non-zero (install manually inside)"
                     ),
                     Err(e) => eprintln!("  Tools:     ⚠️  pi npm install failed to run: {e}"),
+                }
+
+                // Install configured pi extensions (e.g. pi-dynamic-workflows) so
+                // they are available in every Pi sandbox like any other extension.
+                // Non-fatal — runs as the `node` user that owns ~/.pi.
+                if pi_core_ok {
+                    for ext in &pi_cfg.extensions {
+                        let ext_status = std::process::Command::new("podman")
+                            .args([
+                                "exec",
+                                "--user",
+                                "node",
+                                &info.id,
+                                "/bin/bash",
+                                "-lc",
+                                &format!("pi install {ext}"),
+                            ])
+                            .status();
+                        match ext_status {
+                            Ok(s) if s.success() => {
+                                println!("  Tools:     pi extension installed: {ext}")
+                            }
+                            Ok(_) => {
+                                eprintln!("  Tools:     ⚠️  pi install {ext} exited non-zero")
+                            }
+                            Err(e) => eprintln!(
+                                "  Tools:     ⚠️  pi install {ext} failed to run: {e}"
+                            ),
+                        }
+                    }
                 }
             }
         } else {
@@ -4347,8 +4378,8 @@ mod notification_tests {
             "factory section missing when factory_enabled=true"
         );
         assert!(
-            out.contains("factory-spec"),
-            "stage skills should be listed"
+            out.contains("factory-pipeline"),
+            "the factory skill should be listed"
         );
         assert!(out.contains("QA Gate"), "QA Gate mention should be present");
     }
@@ -4361,8 +4392,8 @@ mod notification_tests {
             "factory section must be absent when factory_enabled=false"
         );
         assert!(
-            !out.contains("factory-spec"),
-            "stage skills must not appear when disabled"
+            !out.contains("factory-pipeline"),
+            "factory skills must not appear when disabled"
         );
     }
 

@@ -217,7 +217,8 @@ pub enum SandboxAction {
         #[arg(long)]
         hermes: bool,
         /// Use Pi (pi.dev) coding agent instead of Claude Code.
-        /// Installs @earendil-works/pi-coding-agent at spawn time.
+        /// Installs @earendil-works/pi-coding-agent at spawn time, plus any
+        /// [pi].extensions (e.g. pi-dynamic-workflows) from ~/.nibble/config.toml.
         #[arg(long)]
         pi: bool,
     },

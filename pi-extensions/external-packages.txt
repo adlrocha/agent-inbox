@@ -1,0 +1,21 @@
+# External Pi packages nibble ships to every Pi sandbox.
+#
+# Single source of truth for EXTERNAL (npm/git) pi packages. Local
+# nibble-authored extensions live as *.ts files alongside this file and are
+# copied by install.sh; this file lists only packages that need `pi install`.
+#
+# Format: one package source per line. Blank lines and `#` comments (full-line
+# or trailing) are ignored. Sources follow `pi install` syntax: `npm:<pkg>` or
+# `git:<repo>@<ref>`.
+#
+# Delivery model (same mount-based path as local *.ts extensions — the host
+# ~/.pi/agent is bind-mounted into every sandbox):
+#   - install.sh: best-effort `pi install` on the HOST when `pi` is on PATH
+#     (faster, offline-capable spawns). Silently skipped if `pi` is absent on
+#     the host (e.g. you only use pi through nibble sandboxes).
+#   - nibble spawn: runs `pi install` in-container as a reliable fallback, so
+#     packages are present even without host pi. See [pi].extensions in
+#     ~/.nibble/config.toml (defaults to this file).
+# Both paths read THIS manifest, so adding a package is a one-line edit here.
+
+npm:@quintinshaw/pi-dynamic-workflows
