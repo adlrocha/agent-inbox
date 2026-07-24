@@ -44,7 +44,9 @@ pub struct FactoryConfig {
 }
 
 fn default_factory_enabled() -> bool {
-    true
+    // Opt-in: the full pipeline is noisy (token cost) for the common case.
+    // Enable per-spawn with `nibble sandbox spawn --factory` or [factory].enabled.
+    false
 }
 
 impl Default for FactoryConfig {
@@ -134,6 +136,25 @@ pub struct PiConfig {
     /// If true, npm install @earendil-works/pi-coding-agent on every spawn.
     #[serde(default = "default_pi_install_on_spawn")]
     pub install_on_spawn: bool,
+
+    /// pi extension sources (npm:… / git:…) to `pi install` in every Pi sandbox
+    /// at spawn time, so they are available like any other extension.
+    #[serde(default = "default_pi_extensions")]
+    pub extensions: Vec<String>,
+}
+
+fn default_pi_extensions() -> Vec<String> {
+    // Single source of truth: pi-extensions/external-packages.txt.
+    // install.sh also reads that file (best-effort host install); spawn installs
+    // the resolved list in-container. Edit the manifest to add/remove packages.
+    const MANIFEST: &str = include_str!("../pi-extensions/external-packages.txt");
+    MANIFEST
+        .lines()
+        .map(|line| line.split('#').next().unwrap_or(""))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 fn default_pi_install_on_spawn() -> bool {
@@ -144,6 +165,7 @@ impl Default for PiConfig {
     fn default() -> Self {
         Self {
             install_on_spawn: default_pi_install_on_spawn(),
+            extensions: default_pi_extensions(),
         }
     }
 }
@@ -577,9 +599,25 @@ chat_id = "456789"
     }
 
     #[test]
-    fn test_factory_default_enabled() {
+    fn test_factory_default_disabled() {
+        // Factory is opt-in by default to keep sandboxes low-noise.
         let config = Config::default();
-        assert!(config.factory.enabled);
+        assert!(!config.factory.enabled);
+    }
+
+    #[test]
+    fn test_pi_extensions_default_from_manifest() {
+        // Defaults are sourced from pi-extensions/external-packages.txt.
+        let ext = Config::default().pi.extensions;
+        assert!(
+            ext.iter().any(|e| e == "npm:@quintinshaw/pi-dynamic-workflows"),
+            "manifest default should include pi-dynamic-workflows, got {ext:?}"
+        );
+        // Comments and blank lines must not leak into the parsed list.
+        for e in &ext {
+            assert!(!e.is_empty(), "no empty entries: {ext:?}");
+            assert!(!e.starts_with('#'), "no comment entries: {ext:?}");
+        }
     }
 
     #[test]
@@ -603,13 +641,13 @@ enabled = false
     }
 
     #[test]
-    fn test_parse_toml_factory_absent_defaults_enabled() {
+    fn test_parse_toml_factory_absent_defaults_disabled() {
         let toml_str = r#"
 [telegram]
 enabled = false
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert!(config.factory.enabled);
+        assert!(!config.factory.enabled);
     }
 
     // ── Hermes config tests (from hermes-agent-sandbox blueprint) ──────────────

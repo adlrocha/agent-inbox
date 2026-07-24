@@ -289,14 +289,10 @@ install_skill() {
     local skill_name
     skill_name="$(basename "$src_dir")"
     local dest="$dest_dir/$skill_name"
-    mkdir -p "$dest"
-    cp -f "$src_dir/SKILL.md" "$dest/SKILL.md"
-    # Copy any supporting files the skill ships alongside SKILL.md (e.g. eval.md).
-    for extra in "$src_dir"/*; do
-        [ -f "$extra" ] || continue
-        [ "$(basename "$extra")" = "SKILL.md" ] && continue
-        cp -f "$extra" "$dest/$(basename "$extra")"
-    done
+    # Copy the whole skill directory (SKILL.md plus references/, scripts/, assets/)
+    # so on-demand reference files and helper scripts ship to sandboxes.
+    rm -rf "$dest"
+    cp -r "$src_dir" "$dest"
     ok "skill: $skill_name → $dest/"
 }
 
@@ -305,7 +301,7 @@ NIBBLE_SKILLS_DIR="$HOME/.nibble/skills"
 PI_SKILLS_DIR="$HOME/.pi/agent/skills"
 mkdir -p "$CLAUDE_SKILLS_DIR" "$NIBBLE_SKILLS_DIR"
 
-for skill_dir in "$REPO_DIR/skills"/{factory,nibble}-*/; do
+for skill_dir in "$REPO_DIR/skills"/*/; do
     [ -d "$skill_dir" ] || continue
     install_skill "$skill_dir" "$CLAUDE_SKILLS_DIR"
     install_skill "$skill_dir" "$NIBBLE_SKILLS_DIR"
@@ -313,6 +309,14 @@ for skill_dir in "$REPO_DIR/skills"/{factory,nibble}-*/; do
         mkdir -p "$PI_SKILLS_DIR"
         install_skill "$skill_dir" "$PI_SKILLS_DIR"
     fi
+done
+
+# Remove factory stage skills that were consolidated into factory-pipeline/.
+# Targeted (not a blanket purge) so third-party skills in ~/.claude/skills are kept.
+for stale in factory-spec factory-verify factory-qa-gate factory-lessons; do
+    for dest in "$CLAUDE_SKILLS_DIR" "$NIBBLE_SKILLS_DIR" "$PI_SKILLS_DIR"; do
+        [ -d "$dest/$stale" ] && rm -rf "$dest/$stale" && ok "removed stale skill: $stale"
+    done
 done
 if [ ! -d "$HOME/.pi" ]; then
     warn "~/.pi/ not found — skills staged in ~/.nibble/skills/ only"
@@ -341,6 +345,28 @@ done
 if [ ! -d "$HOME/.pi" ]; then
     warn "~/.pi/ not found — extensions staged in ~/.nibble/extensions/ only"
     warn "  (will be installed automatically when you spawn a Pi sandbox)"
+fi
+
+# ── 4b-ext. External Pi packages (npm/git) ───────────────────────────────────
+# Same delivery model as the local *.ts extensions above (host ~/.pi/agent is
+# bind-mounted into every sandbox), but these need `pi install`. Source of
+# truth: pi-extensions/external-packages.txt. nibble also installs these
+# in-container at spawn as a fallback (see [pi].extensions in config.toml).
+EXTERNAL_MANIFEST="$REPO_DIR/pi-extensions/external-packages.txt"
+if [ -f "$EXTERNAL_MANIFEST" ]; then
+    if command -v pi >/dev/null 2>&1; then
+        while IFS= read -r line || [ -n "$line" ]; do
+            pkg="$(printf '%s' "${line%%#*}" | tr -d '[:space:]')"
+            [ -z "$pkg" ] && continue
+            if pi install "$pkg" >/dev/null 2>&1; then
+                ok "pi package (host): $pkg → ~/.pi/agent"
+            else
+                warn "pi package (host): $pkg install failed (will retry at spawn)"
+            fi
+        done < "$EXTERNAL_MANIFEST"
+    else
+        warn "\`pi\` not on host PATH — external pi packages will install at spawn time"
+    fi
 fi
 
 # ── 4c. Install Claude Code statusline ────────────────────────────────────────
