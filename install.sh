@@ -291,6 +291,12 @@ install_skill() {
     local dest="$dest_dir/$skill_name"
     mkdir -p "$dest"
     cp -f "$src_dir/SKILL.md" "$dest/SKILL.md"
+    # Copy any supporting files the skill ships alongside SKILL.md (e.g. eval.md).
+    for extra in "$src_dir"/*; do
+        [ -f "$extra" ] || continue
+        [ "$(basename "$extra")" = "SKILL.md" ] && continue
+        cp -f "$extra" "$dest/$(basename "$extra")"
+    done
     ok "skill: $skill_name → $dest/"
 }
 
